@@ -2,29 +2,71 @@
 # Milestone 1: Zebra-only devnet setup
 
 services:
-  # Zebra regtest node
   zebra:
-    extends:
-      file: docker/compose/zebra.yml
-      service: zebra
-  
+    # Using official Zebra image from Zcash Foundation
+    image: zfnd/zebra:1.9.0
+    container_name: zecdev-zebra
+    
+    networks:
+      - zecdev
+    
+    # Port mappings (localhost only for security)
+    ports:
+      - "127.0.0.1:8232:8232"  # RPC
+      - "127.0.0.1:8233:8233"  # P2P
+    
+    # Mount configuration and persistent state
+    volumes:
+      - zebra-data:/var/zebra/state
+      - ./docker/configs/zebra.toml:/etc/zebrad/zebrad.toml:ro
+    
+    # Environment variables
+    environment:
+      - NETWORK=Regtest
+      - RUST_LOG=info,zebrad=debug
+      - RUST_BACKTRACE=1
+    
+    # Health check to ensure Zebra is ready
+    healthcheck:
+      test: |
+        curl -sf --max-time 5 \
+          --data-binary '{"jsonrpc":"2.0","id":"healthcheck","method":"getinfo","params":[]}' \
+          -H 'content-type: application/json' \
+          http://localhost:8232/ > /dev/null || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Resource limits (adjust based on your system)
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+
   # Faucet service - PLACEHOLDER for M2
   # Uncomment when implementing faucet in Milestone 2
   # faucet:
-  #   extends:
-  #     file: docker/compose/faucet.yml
-  #     service: faucet
+  #   build: ./faucet
+  #   container_name: zecdev-faucet
+  #   networks:
+  #     - zecdev
+  #   ports:
+  #     - "127.0.0.1:8080:8080"
   #   depends_on:
   #     zebra:
   #       condition: service_healthy
 
-# Networks must be defined in main compose file when using extends
 networks:
   zecdev:
     driver: bridge
     name: zecdev-network
 
-# Volumes must be defined in main compose file when using extends
 volumes:
   zebra-data:
     name: zecdev-zebra-data
