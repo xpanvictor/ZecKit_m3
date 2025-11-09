@@ -20,9 +20,6 @@ checkpoint_sync = false
 # Cache directory for blockchain state
 cache_dir = "/var/zebra/state"
 
-# Enable debug mode for better logging
-debug_skip_parameter_preload = false
-
 [rpc]
 # Enable RPC server
 # SECURITY: In production, use authenticated endpoints and TLS

@@ -84,8 +84,9 @@ test_blockchain_info() {
         local chain=$(echo "$response" | grep -o '"chain":"[^"]*"' | cut -d'"' -f4)
         log_info "Chain: $chain"
         
-        if [ "$chain" = "regtest" ]; then
-            log_pass "Blockchain info retrieved successfully (regtest)"
+        # Zebra reports Regtest as "test" in some versions
+        if [ "$chain" = "regtest" ] || [ "$chain" = "test" ]; then
+            log_pass "Blockchain info retrieved successfully ($chain - regtest mode)"
             return 0
         else
             log_fail "Expected regtest chain, got: $chain"
