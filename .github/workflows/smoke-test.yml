@@ -7,7 +7,7 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch:  # Allow manual triggers to work on WSL runner
+  workflow_dispatch:  # Allow manual triggers
 
 jobs:
   smoke-test:
@@ -40,8 +40,29 @@ jobs:
       - name: Wait for services to be healthy
         run: |
           echo "Waiting for Zebra to be ready..."
-          chmod +x docker/healthchecks/check-zebra.sh
-          ./docker/healthchecks/check-zebra.sh
+          echo "Current directory: $(pwd)"
+          echo "Files in docker/healthchecks:"
+          ls -la docker/healthchecks/ || echo "Directory not found"
+          
+          # Wait for Zebra to start
+          echo "Sleeping 60 seconds for Zebra startup..."
+          sleep 60
+          
+          # Check if Zebra is responding
+          echo "Testing Zebra RPC..."
+          for i in {1..12}; do
+            if curl -sf --max-time 5 \
+              --data-binary '{"jsonrpc":"2.0","id":"1","method":"getinfo","params":[]}' \
+              -H 'content-type: application/json' \
+              http://127.0.0.1:8232 > /dev/null 2>&1; then
+              echo "✓ Zebra is ready!"
+              break
+            fi
+            echo "Attempt $i/12: Zebra not ready yet, waiting..."
+            sleep 10
+          done
+          
+          echo "Health check complete"
       
       - name: Run smoke tests
         run: |
