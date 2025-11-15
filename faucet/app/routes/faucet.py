@@ -186,3 +186,67 @@ def get_faucet_address():
         "address": wallet.get_address(),
         "balance": wallet.get_balance()
     }), 200
+
+
+@faucet_bp.route('/admin/add-funds', methods=['POST'])
+def admin_add_funds():
+    """
+    Admin endpoint to manually add funds to faucet
+    For development/testing only
+    
+    Request Body:
+        {
+            "amount": 1000.0,
+            "secret": "dev-secret"  // Required for security
+        }
+    
+    Returns:
+        200: Funds added
+        401: Unauthorized
+        400: Invalid request
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({
+            "error": "Invalid JSON",
+            "code": "INVALID_JSON"
+        }), 400
+    
+    # Simple secret check (for dev only!)
+    secret = data.get('secret')
+    if secret != current_app.config.get('SECRET_KEY'):
+        return jsonify({
+            "error": "Unauthorized",
+            "code": "UNAUTHORIZED"
+        }), 401
+    
+    try:
+        amount = float(data.get('amount', 0))
+        if amount <= 0:
+            return jsonify({
+                "error": "Amount must be positive",
+                "code": "INVALID_AMOUNT"
+            }), 400
+        
+        wallet = current_app.faucet_wallet
+        if not wallet or not wallet.is_loaded():
+            return jsonify({
+                "error": "Faucet wallet not available",
+                "code": "FAUCET_UNAVAILABLE"
+            }), 503
+        
+        wallet.add_funds(amount)
+        
+        return jsonify({
+            "success": True,
+            "amount_added": amount,
+            "new_balance": wallet.get_balance(),
+            "message": f"Added {amount} ZEC to faucet"
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"Error adding funds: {e}")
+        return jsonify({
+            "error": "Internal server error",
+            "code": "INTERNAL_ERROR"
+        }), 500
