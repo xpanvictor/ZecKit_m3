@@ -32,6 +32,7 @@ class FaucetWallet:
         self.address = None
         self.created_at = None
         self.transaction_history: List[Dict[str, Any]] = []
+        self.initial_balance: float = 0.0  # Track initial funding
         
         # Try to load existing wallet or create new
         if os.path.exists(wallet_file):
@@ -145,14 +146,21 @@ class FaucetWallet:
             if not self.is_loaded():
                 return 0.0
             
-            # Get unspent outputs for this address
-            unspent = self.zebra_client.list_unspent(
-                minconf=1,
-                addresses=[self.address]
-            )
+            # Zebra doesn't support listunspent or getbalance for specific addresses
+            # We need to track balance through transaction history
+            # For now, return 0.0 and we'll implement proper tracking when we add funding
             
-            balance = sum(utxo.get('amount', 0.0) for utxo in unspent)
-            return balance
+            # TODO M2: Implement proper balance tracking via transaction monitoring
+            logger.debug(f"Balance check for {self.address} - using transaction history")
+            
+            # Calculate from transaction history
+            received = 0.0
+            sent = sum(tx.get('amount', 0.0) for tx in self.transaction_history)
+            
+            # For now, if we have no history, assume 0
+            balance = received - sent
+            
+            return max(0.0, balance)  # Never return negative
         
         except Exception as e:
             logger.error(f"Failed to get balance: {e}")

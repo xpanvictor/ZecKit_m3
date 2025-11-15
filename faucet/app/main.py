@@ -127,11 +127,13 @@ def create_app(config_name: Optional[str] = None) -> Flask:
     # Register blueprints
     app.register_blueprint(health_bp)
     
-    # Import and register other routes here as we create them
-    # from .routes.faucet import faucet_bp
-    # app.register_blueprint(faucet_bp)
-    # from .routes.stats import stats_bp
-    # app.register_blueprint(stats_bp)
+    # Import and register faucet routes
+    from .routes.faucet import faucet_bp
+    app.register_blueprint(faucet_bp)
+    
+    # Import and register stats routes
+    from .routes.stats import stats_bp
+    app.register_blueprint(stats_bp)
     
     # Error handlers
     @app.errorhandler(404)
