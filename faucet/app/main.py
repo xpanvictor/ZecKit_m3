@@ -1,51 +1,38 @@
 """
-ZecKit Faucet - Main Flask Application
-Entry point for the faucet service
+ZecKit Faucet - Main Application with UA Fixtures Support
 """
 from flask import Flask, jsonify
 from flask_cors import CORS
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
+from datetime import datetime
 import logging
 import sys
-from typing import Optional
 
 from .config import get_config
 from .zebra_rpc import ZebraRPCClient
 from .wallet import FaucetWallet
+from .ua_fixtures import UAFixtureManager, initialize_ua_fixtures
 from .routes.health import health_bp
-from datetime import datetime
+from .routes.faucet import faucet_bp
+from .routes.stats import stats_bp
 
-def setup_logging(app: Flask) -> None:
+
+def setup_logging(log_level: str = "INFO"):
     """Configure application logging"""
-    log_level = app.config.get('LOG_LEVEL', 'INFO')
-    log_format = app.config.get('LOG_FORMAT', 
-                                 '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
-    # Configure root logger
     logging.basicConfig(
-        level=getattr(logging, log_level),
-        format=log_format,
+        level=getattr(logging, log_level.upper()),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(sys.stdout)
         ]
     )
-    
-    # Set Flask logger
-    app.logger.setLevel(getattr(logging, log_level))
-    
-    # Silence some noisy loggers
-    logging.getLogger('werkzeug').setLevel(logging.WARNING)
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 
-def create_app(config_name: Optional[str] = None) -> Flask:
+def create_app(config_name: str = None) -> Flask:
     """
-    Flask application factory
+    Application factory
     
     Args:
         config_name: Configuration environment (development/production/testing)
-                    If None, reads from FLASK_ENV
     
     Returns:
         Configured Flask application
@@ -53,87 +40,122 @@ def create_app(config_name: Optional[str] = None) -> Flask:
     app = Flask(__name__)
     
     # Load configuration
-    config_class = get_config(config_name)
-    app.config.from_object(config_class)
+    config = get_config(config_name)
+    app.config.from_object(config)
     
     # Setup logging
-    setup_logging(app)
-    app.logger.info(f"Starting ZecKit Faucet (env: {config_name or 'default'})")
+    setup_logging(app.config['LOG_LEVEL'])
+    logger = logging.getLogger(__name__)
     
-    # Initialize CORS
-    CORS(app, origins=app.config.get('CORS_ORIGINS', '*'))
-    
-    # Initialize rate limiter
-    limiter = Limiter(
-        app=app,
-        key_func=get_remote_address,
-        default_limits=[] if not app.config.get('RATE_LIMIT_ENABLED') else [
-            f"{app.config.get('RATE_LIMIT_REQUESTS')}/{app.config.get('RATE_LIMIT_WINDOW')} seconds"
-        ],
-        storage_uri="memory://"  # In-memory storage for now
-    )
-    app.limiter = limiter
+    # Enable CORS
+    CORS(app, origins=app.config['CORS_ORIGINS'])
     
     # Initialize Zebra RPC client
     try:
-        app.logger.info(f"Connecting to Zebra at {app.config['ZEBRA_RPC_URL']}")
         app.zebra_client = ZebraRPCClient(
             url=app.config['ZEBRA_RPC_URL'],
             username=app.config.get('ZEBRA_RPC_USER'),
             password=app.config.get('ZEBRA_RPC_PASS'),
-            timeout=app.config.get('ZEBRA_RPC_TIMEOUT', 30)
+            timeout=app.config['ZEBRA_RPC_TIMEOUT']
         )
         
         # Test connection
         if app.zebra_client.ping():
-            app.logger.info("✓ Connected to Zebra")
-            height = app.zebra_client.get_block_count()
-            app.logger.info(f"✓ Current block height: {height}")
+            block_height = app.zebra_client.get_block_count()
+            logger.info(f"✓ Connected to Zebra (block height: {block_height})")
         else:
-            app.logger.warning("⚠ Could not connect to Zebra (will retry)")
+            logger.warning("⚠ Zebra not responding, will retry...")
     
     except Exception as e:
-        app.logger.error(f"✗ Failed to initialize Zebra client: {e}")
-        app.logger.warning("Faucet will start but may not be functional")
+        logger.error(f"Failed to initialize Zebra client: {e}")
         app.zebra_client = None
     
-    # Initialize wallet
+    # Initialize Faucet Wallet
     try:
-        app.logger.info("Initializing faucet wallet...")
-        app.faucet_wallet = FaucetWallet(
-            zebra_client=app.zebra_client,
-            wallet_file=app.config.get('WALLET_FILE')
-        )
-        
-        if app.faucet_wallet.is_loaded():
-            balance = app.faucet_wallet.get_balance()
-            address = app.faucet_wallet.get_address()
-            app.logger.info(f"✓ Wallet loaded")
-            app.logger.info(f"✓ Faucet address: {address}")
-            app.logger.info(f"✓ Balance: {balance} ZEC")
+        if app.zebra_client:
+            app.faucet_wallet = FaucetWallet(
+                zebra_client=app.zebra_client,
+                wallet_file=app.config['WALLET_FILE']
+            )
             
-            # Check if balance is low
-            low_threshold = app.config.get('FAUCET_LOW_BALANCE_THRESHOLD', 100.0)
-            if balance < low_threshold:
-                app.logger.warning(f"⚠ Low balance! ({balance} < {low_threshold} ZEC)")
+            if app.faucet_wallet.is_loaded():
+                balance = app.faucet_wallet.get_balance()
+                address = app.faucet_wallet.get_address()
+                logger.info(f"✓ Faucet wallet loaded")
+                logger.info(f"  Address: {address}")
+                logger.info(f"  Balance: {balance} ZEC")
+                
+                # Auto-fund if balance is 0
+                if balance == 0:
+                    logger.info("Faucet balance is 0, adding initial funds...")
+                    app.faucet_wallet.add_funds(
+                        amount=1000.0,
+                        note="Initial faucet funding"
+                    )
+                    logger.info(f"✓ Added 1000 ZEC. New balance: {app.faucet_wallet.get_balance()} ZEC")
+            else:
+                logger.error("Failed to load faucet wallet")
+                app.faucet_wallet = None
         else:
-            app.logger.warning("⚠ Wallet not loaded (will try to create)")
+            logger.warning("Skipping wallet initialization (Zebra not available)")
+            app.faucet_wallet = None
     
     except Exception as e:
-        app.logger.error(f"✗ Failed to initialize wallet: {e}")
-        app.logger.warning("Faucet will start but may not be functional")
+        logger.error(f"Failed to initialize faucet wallet: {e}")
         app.faucet_wallet = None
+    
+    # Initialize UA Fixtures (M2 requirement)
+    try:
+        if app.zebra_client and app.faucet_wallet:
+            logger.info("Initializing Unified Address (ZIP-316) fixtures...")
+            app.ua_fixtures = initialize_ua_fixtures(
+                zebra_client=app.zebra_client,
+                faucet_wallet=app.faucet_wallet
+            )
+            logger.info(f"✓ UA fixtures ready ({len(app.ua_fixtures.get_all_fixtures())} fixtures)")
+        else:
+            logger.warning("Skipping UA fixtures (wallet not available)")
+            app.ua_fixtures = None
+    except Exception as e:
+        logger.error(f"Failed to initialize UA fixtures: {e}")
+        app.ua_fixtures = None
     
     # Register blueprints
     app.register_blueprint(health_bp)
-    
-    # Import and register faucet routes
-    from .routes.faucet import faucet_bp
     app.register_blueprint(faucet_bp)
-    
-    # Import and register stats routes
-    from .routes.stats import stats_bp
     app.register_blueprint(stats_bp)
+    
+    # Add fixtures endpoint
+    @app.route('/fixtures', methods=['GET'])
+    def get_fixtures():
+        """Get UA fixtures for testing"""
+        if not app.ua_fixtures:
+            return jsonify({
+                "error": "UA fixtures not available",
+                "code": "FIXTURES_UNAVAILABLE"
+            }), 503
+        
+        return jsonify(app.ua_fixtures.export_for_testing()), 200
+    
+    # Root endpoint
+    @app.route('/', methods=['GET'])
+    def root():
+        return jsonify({
+            "name": "ZecKit Faucet",
+            "version": "0.1.0",
+            "description": "Zcash Regtest Faucet for ZecKit",
+            "endpoints": {
+                "health": "/health",
+                "stats": "/stats",
+                "request": "/request",
+                "address": "/address",
+                "fixtures": "/fixtures",
+                "history": "/history"
+            },
+            "zebra_connected": app.zebra_client is not None and app.zebra_client.ping(),
+            "wallet_loaded": app.faucet_wallet is not None and app.faucet_wallet.is_loaded(),
+            "ua_fixtures_loaded": app.ua_fixtures is not None
+        }), 200
     
     # Error handlers
     @app.errorhandler(404)
@@ -145,50 +167,25 @@ def create_app(config_name: Optional[str] = None) -> Flask:
     
     @app.errorhandler(500)
     def internal_error(error):
-        app.logger.error(f"Internal error: {error}")
+        logger.error(f"Internal server error: {error}")
         return jsonify({
             "error": "Internal server error",
             "code": "INTERNAL_ERROR"
         }), 500
     
-    @app.errorhandler(429)
-    def ratelimit_handler(error):
-        return jsonify({
-            "error": "Rate limit exceeded",
-            "code": "RATE_LIMIT_EXCEEDED",
-            "message": str(error.description)
-        }), 429
-    
-    # Root endpoint
-    @app.route('/')
-    def index():
-        return jsonify({
-            "service": "ZecKit Faucet",
-            "version": "0.1.0",
-            "status": "running",
-            "endpoints": {
-                "health": "/health",
-                "ready": "/ready",
-                "live": "/live",
-                "request_funds": "/request (POST)",
-                "faucet_address": "/address (GET)",
-                "stats": "/stats (GET)",
-                "history": "/history (GET)"
-            }
-        })
-    
+    # Store app start time for uptime tracking
     app.start_time = datetime.utcnow()
-    app.logger.info(f"Faucet started at {app.start_time.isoformat()}Z")
-    # ──────────────────────────────────────────────────────────────
     
-    app.logger.info("✓ ZecKit Faucet initialized successfully")
+    logger.info("✓ ZecKit Faucet initialized successfully")
+    
     return app
 
-# For running directly with python -m app.main
+
+# For direct execution
 if __name__ == '__main__':
     app = create_app()
     app.run(
         host='0.0.0.0',
         port=8080,
-        debug=app.config.get('DEBUG', False)
+        debug=True
     )

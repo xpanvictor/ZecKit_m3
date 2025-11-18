@@ -44,21 +44,33 @@ def get_stats():
     
     # Wallet stats
     wallet_stats = wallet.get_stats()
+    
+    # Get transaction history for last_request
     tx_history = wallet.get_transaction_history(limit=1000)
-    last_request = tx_history[-1].get('timestamp') if tx_history else None
-
+    
+    # Find the most recent spending transaction (not funding)
+    last_request = None
+    for tx in tx_history:
+        if tx.get('type') == 'spending':
+            last_request = tx.get('timestamp')
+            break
+    
     # REAL UPTIME — this works because we set app.start_time in main.py
     uptime_seconds = (datetime.utcnow() - current_app.start_time).total_seconds()
 
+    # Calculate total requests (spending events only)
+    total_requests = wallet_stats.get('total_spending_events', 0)
+    
     stats = {
         "faucet_address": wallet_stats['address'],
         "current_balance": wallet_stats['current_balance'],
-        "total_requests": wallet_stats['total_transactions'],
-        "total_sent": wallet_stats['total_sent'],
+        "total_requests": total_requests,
+        "total_sent": wallet_stats.get('total_spent', 0.0),
+        "total_funded": wallet_stats.get('total_funded', 0.0),
         "created_at": wallet_stats['created_at'],
         "last_request": last_request,
-        "uptime": _format_uptime(uptime_seconds),        # e.g. "2d 9h 34m 12s"
-        "uptime_seconds": int(uptime_seconds),           # for bots/monitoring
+        "uptime": _format_uptime(uptime_seconds),
+        "uptime_seconds": int(uptime_seconds),
         "version": "0.1.0"
     }
     

@@ -1,6 +1,6 @@
 """
-ZecKit Faucet - Wallet Management
-Simple wallet for managing faucet funds
+ZecKit Faucet - Fixed Wallet Management
+Proper balance tracking with funding history
 """
 import json
 import logging
@@ -16,38 +16,24 @@ logger = logging.getLogger(__name__)
 
 class FaucetWallet:
     """
-    Simple wallet for faucet operations
-    Manages a single transparent address and tracks transactions
+    Simple wallet for faucet operations with proper balance tracking
     """
     
     def __init__(self, zebra_client: ZebraRPCClient, wallet_file: str = "/var/faucet/wallet.json"):
-        """
-        Initialize faucet wallet
-        
-        Args:
-            zebra_client: Zebra RPC client
-            wallet_file: Path to wallet state file
-        """
         self.zebra_client = zebra_client
         self.wallet_file = wallet_file
         self.address = None
         self.created_at = None
-        self.transaction_history: List[Dict[str, Any]] = []
-        self.initial_balance: float = 0.0  # Track initial funding
+        # Separate transaction types for clear accounting
+        self.funding_history: List[Dict[str, Any]] = []
+        self.spending_history: List[Dict[str, Any]] = []
         
-        # Try to load existing wallet or create new
         if os.path.exists(wallet_file):
             self._load_wallet()
         else:
             self._create_wallet()
     
     def _load_wallet(self) -> bool:
-        """
-        Load wallet from file
-        
-        Returns:
-            True if loaded successfully
-        """
         try:
             logger.info(f"Loading wallet from {self.wallet_file}")
             with open(self.wallet_file, 'r') as f:
@@ -55,14 +41,16 @@ class FaucetWallet:
             
             self.address = data.get('address')
             self.created_at = data.get('created_at')
-            self.transaction_history = data.get('transaction_history', [])
-            self.initial_balance = data.get('initial_balance', 0.0)
+            self.funding_history = data.get('funding_history', [])
+            self.spending_history = data.get('spending_history', [])
             
             if not self.address:
                 logger.error("Wallet file missing address")
                 return False
             
             logger.info(f"✓ Wallet loaded: {self.address}")
+            logger.info(f"  Funding events: {len(self.funding_history)}")
+            logger.info(f"  Spending events: {len(self.spending_history)}")
             return True
         
         except Exception as e:
@@ -70,32 +58,22 @@ class FaucetWallet:
             return False
     
     def _create_wallet(self) -> bool:
-        """
-        Create new wallet
-        
-        Returns:
-            True if created successfully
-        """
         try:
             logger.info("Creating new faucet wallet")
             
-            # Try to generate new address from Zebra
             try:
                 self.address = self.zebra_client.get_new_address("transparent")
                 logger.info(f"✓ Generated new address from Zebra: {self.address}")
             except Exception as e:
                 logger.warning(f"Could not generate address from Zebra: {e}")
                 logger.info("Using fallback regtest address")
-                # Fallback: Use a known regtest address
-                # This is safe for regtest only - never use in production
                 self.address = "tmBsTi2xWTjUdEXnuTceL7fecEQKeWu4u6d"
             
             self.created_at = datetime.utcnow().isoformat() + "Z"
-            self.transaction_history = []
+            self.funding_history = []
+            self.spending_history = []
             
-            # Save to file
             self._save_wallet()
-            
             logger.info(f"✓ New wallet created: {self.address}")
             return True
         
@@ -104,21 +82,16 @@ class FaucetWallet:
             return False
     
     def _save_wallet(self) -> bool:
-        """
-        Save wallet to file
-        
-        Returns:
-            True if saved successfully
-        """
         try:
-            # Ensure directory exists
             os.makedirs(os.path.dirname(self.wallet_file), exist_ok=True)
             
             data = {
                 'address': self.address,
                 'created_at': self.created_at,
-                'initial_balance': self.initial_balance,
-                'transaction_history': self.transaction_history[-1000:]  # Keep last 1000
+                'funding_history': self.funding_history[-1000:],
+                'spending_history': self.spending_history[-1000:],
+                # Store computed balance for quick reference
+                'last_computed_balance': self.get_balance()
             }
             
             with open(self.wallet_file, 'w') as f:
@@ -131,50 +104,47 @@ class FaucetWallet:
             return False
     
     def is_loaded(self) -> bool:
-        """Check if wallet is loaded and ready"""
         return self.address is not None
     
     def get_address(self) -> Optional[str]:
-        """Get faucet address"""
         return self.address
     
     def get_balance(self) -> float:
         """
-        Get current balance
-        
-        Returns:
-            Balance in ZEC
+        Calculate balance: total_funded - total_spent
         """
         try:
             if not self.is_loaded():
                 return 0.0
             
-            # Calculate balance from initial funding minus sent transactions
-            sent = sum(tx.get('amount', 0.0) for tx in self.transaction_history)
-            balance = self.initial_balance - sent
+            total_funded = sum(tx.get('amount', 0.0) for tx in self.funding_history)
+            total_spent = sum(tx.get('amount', 0.0) for tx in self.spending_history)
             
-            return max(0.0, balance)  # Never return negative
+            balance = total_funded - total_spent
+            return max(0.0, balance)
         
         except Exception as e:
             logger.error(f"Failed to get balance: {e}")
             return 0.0
     
-    def add_funds(self, amount: float, txid: Optional[str] = None) -> bool:
+    def add_funds(self, amount: float, txid: Optional[str] = None, note: str = "Admin funding") -> bool:
         """
-        Add funds to wallet (called when receiving funds)
-        
-        Args:
-            amount: Amount received in ZEC
-            txid: Optional transaction ID
-        
-        Returns:
-            True if successful
+        Add funds to wallet (funding event)
         """
         try:
-            self.initial_balance += amount
-            logger.info(f"✓ Added {amount} ZEC to wallet. New balance: {self.get_balance()}")
+            funding_record = {
+                'txid': txid or f"funding-{datetime.utcnow().timestamp()}",
+                'amount': amount,
+                'timestamp': datetime.utcnow().isoformat() + "Z",
+                'note': note
+            }
+            
+            self.funding_history.append(funding_record)
             self._save_wallet()
+            
+            logger.info(f"✓ Added {amount} ZEC. New balance: {self.get_balance()} ZEC")
             return True
+            
         except Exception as e:
             logger.error(f"Failed to add funds: {e}")
             return False
@@ -186,53 +156,39 @@ class FaucetWallet:
         memo: Optional[str] = None
     ) -> Optional[str]:
         """
-        Send funds from faucet to address
-        
-        IMPORTANT: Zebra doesn't support wallet RPCs (sendtoaddress, etc.)
-        For regtest/development, we simulate transactions
-        
-        Args:
-            to_address: Destination address
-            amount: Amount in ZEC
-            memo: Optional memo (for shielded addresses)
-        
-        Returns:
-            Transaction ID if successful, None otherwise
+        Send funds from faucet (spending event)
+        MOCK MODE: Simulated transactions for regtest
         """
         try:
             if not self.is_loaded():
                 logger.error("Wallet not loaded")
                 return None
             
-            # Check balance
             balance = self.get_balance()
             if balance < amount:
                 logger.error(f"Insufficient balance: {balance} < {amount}")
                 return None
             
-            # MOCK TRANSACTION MODE
-            # Zebra doesn't have wallet RPCs - we simulate for dev/testing
-            logger.info(f"Simulating send of {amount} ZEC to {to_address}")
-            
-            # Generate a mock TXID (deterministic but unique)
+            # Generate mock TXID
             mock_data = f"{to_address}{amount}{datetime.utcnow().isoformat()}"
             txid = hashlib.sha256(mock_data.encode()).hexdigest()
             
             logger.warning(f"⚠ MOCK TRANSACTION (Zebra has no wallet) - TXID: {txid}")
             
-            # Record transaction
-            tx_record = {
+            # Record spending
+            spending_record = {
                 'txid': txid,
                 'to_address': to_address,
                 'amount': amount,
                 'timestamp': datetime.utcnow().isoformat() + "Z",
                 'memo': memo,
-                'mock': True  # Flag as simulated
+                'mock': True
             }
-            self.transaction_history.append(tx_record)
+            
+            self.spending_history.append(spending_record)
             self._save_wallet()
             
-            logger.info(f"✓ Simulated send of {amount} ZEC (mock txid: {txid[:16]}...)")
+            logger.info(f"✓ Sent {amount} ZEC to {to_address}. New balance: {self.get_balance()} ZEC")
             return txid
         
         except Exception as e:
@@ -241,29 +197,32 @@ class FaucetWallet:
     
     def get_transaction_history(self, limit: int = 100) -> List[Dict[str, Any]]:
         """
-        Get recent transaction history
-        
-        Args:
-            limit: Maximum number of transactions to return
-        
-        Returns:
-            List of transaction records
+        Get combined transaction history (funding + spending)
         """
-        return self.transaction_history[-limit:]
+        # Combine and sort by timestamp
+        all_txs = []
+        
+        for tx in self.funding_history:
+            all_txs.append({**tx, 'type': 'funding'})
+        
+        for tx in self.spending_history:
+            all_txs.append({**tx, 'type': 'spending'})
+        
+        # Sort by timestamp descending
+        all_txs.sort(key=lambda x: x['timestamp'], reverse=True)
+        
+        return all_txs[:limit]
     
     def get_stats(self) -> Dict[str, Any]:
-        """
-        Get wallet statistics
-        
-        Returns:
-            Dictionary with wallet stats
-        """
-        total_sent = sum(tx['amount'] for tx in self.transaction_history)
+        total_funded = sum(tx['amount'] for tx in self.funding_history)
+        total_spent = sum(tx['amount'] for tx in self.spending_history)
         
         return {
             'address': self.address,
             'created_at': self.created_at,
             'current_balance': self.get_balance(),
-            'total_transactions': len(self.transaction_history),
-            'total_sent': total_sent
+            'total_funding_events': len(self.funding_history),
+            'total_spending_events': len(self.spending_history),
+            'total_funded': total_funded,
+            'total_spent': total_spent
         }

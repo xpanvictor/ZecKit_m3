@@ -8,6 +8,7 @@ pub struct HealthChecker {
     client: Client,
     max_retries: u32,
     retry_delay: Duration,
+    backend_max_retries: u32, // Longer timeout for backends
 }
 
 impl HealthChecker {
@@ -16,6 +17,7 @@ impl HealthChecker {
             client: Client::new(),
             max_retries: 60, // 60 retries * 2s = 2 minutes max
             retry_delay: Duration::from_secs(2),
+            backend_max_retries: 90, // 90 retries * 2s = 3 minutes for backends
         }
     }
 
@@ -52,19 +54,20 @@ impl HealthChecker {
     }
 
     pub async fn wait_for_backend(&self, backend: &str, pb: &ProgressBar) -> Result<()> {
-        for i in 0..self.max_retries {
+        // Use longer timeout for backends since they need to sync with Zebra
+        for i in 0..self.backend_max_retries {
             pb.tick();
             
             match self.check_backend(backend).await {
                 Ok(_) => return Ok(()),
-                Err(_) if i < self.max_retries - 1 => {
+                Err(_) if i < self.backend_max_retries - 1 => {
                     sleep(self.retry_delay).await;
                 }
                 Err(e) => return Err(e),
             }
         }
 
-        Err(ZecDevError::ServiceNotReady(backend.into()))
+        Err(ZecDevError::ServiceNotReady(format!("{} (may need more sync time)", backend)))
     }
 
     async fn check_zebra(&self) -> Result<()> {
@@ -111,10 +114,18 @@ impl HealthChecker {
     }
 
     async fn check_backend(&self, backend: &str) -> Result<()> {
-        // For now, just check if the port is responding
-        // In production, you'd want backend-specific health checks
-        let url = format!("http://127.0.0.1:9067");
+        // For lightwalletd, check gRPC port
+        // For zaino, check its port
+        let port = match backend {
+            "lwd" => 9067,
+            "zaino" => 9067,
+            _ => return Err(ZecDevError::HealthCheck("Unknown backend".into())),
+        };
         
+        let url = format!("http://127.0.0.1:{}", port);
+        
+        // Simple TCP check - just see if port responds
+        // Note: gRPC won't return valid HTTP, but connection is what matters
         let resp = self
             .client
             .get(&url)
@@ -122,9 +133,18 @@ impl HealthChecker {
             .send()
             .await;
 
+        // For gRPC services, any response (even errors) means it's listening
         match resp {
             Ok(_) => Ok(()),
-            Err(_) => Err(ZecDevError::HealthCheck(format!("{} not ready", backend))),
+            Err(e) => {
+                // Check if it's a connection error or just HTTP error
+                if e.is_connect() || e.is_timeout() {
+                    Err(ZecDevError::HealthCheck(format!("{} not ready", backend)))
+                } else {
+                    // Got a response (even if HTTP error), means service is up
+                    Ok(())
+                }
+            }
         }
     }
 }

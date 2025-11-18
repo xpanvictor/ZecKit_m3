@@ -143,9 +143,18 @@ async fn test_faucet_stats(client: &Client) -> Result<()> {
     }
 
     let json: Value = resp.json().await?;
+    
+    // More lenient checks - just verify key fields exist
     if json.get("faucet_address").is_none() {
         return Err(crate::error::ZecDevError::HealthCheck(
-            "Invalid stats response".into()
+            "Stats missing faucet_address".into()
+        ));
+    }
+    
+    // Check that current_balance exists (can be any number including 0)
+    if json.get("current_balance").is_none() {
+        return Err(crate::error::ZecDevError::HealthCheck(
+            "Stats missing current_balance".into()
         ));
     }
 
