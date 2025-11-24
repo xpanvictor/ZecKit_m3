@@ -5,10 +5,21 @@ RUN groupadd -r faucet && useradd -r -g faucet faucet
 
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies including Docker CLI
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
+
+# Add faucet user to docker group (for socket access)
+RUN groupadd -f docker && usermod -aG docker faucet
 
 # Copy requirements and install
 COPY requirements.txt .

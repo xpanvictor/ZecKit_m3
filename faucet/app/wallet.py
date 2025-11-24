@@ -1,209 +1,211 @@
-"""
-ZecKit Faucet Wallet - Real Blockchain Transactions via Zingo-CLI
-"""
-import os
-import json
 import subprocess
+import json
+import os
 from datetime import datetime
-from typing import Dict, Optional, List
-from decimal import Decimal
-
+from pathlib import Path
 
 class ZingoWallet:
-    """
-    Real Zcash wallet using Zingo-CLI for actual blockchain transactions.
-    """
-    
-    def __init__(self):
-        self.data_dir = os.getenv("ZINGO_DATA_DIR", "/var/zingo")
-        self.cli_path = os.getenv("ZINGO_CLI_PATH", "/usr/local/bin/zingo-cli")
-        self.server = os.getenv("LIGHTWALLETD_URI", "http://lightwalletd:9067")
+    def __init__(self, data_dir="/var/zingo", lightwalletd_uri="http://lightwalletd:9067"):
+        self.data_dir = data_dir
+        self.lightwalletd_uri = lightwalletd_uri
+        self.history_file = Path(data_dir) / "faucet-history.json"
         
-        # Transaction history
-        self.history_file = os.path.join(self.data_dir, "faucet-history.json")
-        self.load_history()
-    
-    def load_history(self):
-        """Load transaction history from disk"""
-        if os.path.exists(self.history_file):
-            with open(self.history_file, 'r') as f:
-                self.history = json.load(f)
-        else:
-            self.history = {
-                "total_sent": 0.0,
-                "total_requests": 0,
-                "transactions": []
-            }
-    
-    def save_history(self):
-        """Save transaction history to disk"""
-        with open(self.history_file, 'w') as f:
-            json.dump(self.history, f, indent=2)
-    
-    def _run_zingo_cmd(self, command: str, *args) -> Dict:
-        """
-        Execute a zingo-cli command and return parsed JSON output.
-        """
-        cmd = [
-            self.cli_path,
-            "--data-dir", self.data_dir,
-            "--server", self.server,
-            command
-        ]
-        cmd.extend(args)
-        
+    def _run_zingo_cmd(self, command):
+        """Run zingo-cli command via docker exec to zingo-wallet container"""
         try:
+            # Build the command to run in zingo-wallet container
+            cmd = [
+                "docker", "exec", "zeckit-zingo-wallet",
+                "zingo-cli",
+                "--data-dir", self.data_dir,
+                "--server", self.lightwalletd_uri,
+                "--nosync"
+            ]
+            
+            # Send command via stdin
             result = subprocess.run(
                 cmd,
+                input=f"{command}\nquit\n",
                 capture_output=True,
                 text=True,
-                check=True,
                 timeout=30
             )
             
-            return json.loads(result.stdout)
+            if result.returncode != 0:
+                raise Exception(f"Command failed: {result.stderr}")
             
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Zingo-CLI Error: {e.stderr}")
-            raise Exception(f"Zingo-CLI command failed: {e.stderr}")
-        except json.JSONDecodeError as e:
-            print(f"❌ Failed to parse Zingo-CLI output: {result.stdout}")
-            raise Exception(f"Invalid JSON from Zingo-CLI: {str(e)}")
+            # Parse JSON output
+            output = result.stdout.strip()
+            
+            # Find JSON in output
+            for line in output.split('\n'):
+                line = line.strip()
+                if line.startswith('{') or line.startswith('['):
+                    try:
+                        return json.loads(line)
+                    except:
+                        continue
+            
+            return {"output": output}
+            
+        except subprocess.TimeoutExpired:
+            raise Exception("Command timed out")
         except Exception as e:
-            print(f"❌ Unexpected error: {str(e)}")
-            raise
+            raise Exception(f"Failed to run command: {str(e)}")
     
-    def get_balance(self) -> Decimal:
-        """Get current wallet balance from Zingo-CLI"""
+    def get_balance(self):
+        """Get wallet balance in ZEC"""
         try:
-            balance_data = self._run_zingo_cmd("balance")
+            result = self._run_zingo_cmd("balance")
             
-            # Sum all pool balances
+            # Sum all balance types
             total_zatoshis = 0
-            
-            if "transparent_balance" in balance_data:
-                total_zatoshis += balance_data["transparent_balance"]
-            if "sapling_balance" in balance_data:
-                total_zatoshis += balance_data["sapling_balance"]
-            if "orchard_balance" in balance_data:
-                total_zatoshis += balance_data["orchard_balance"]
+            if isinstance(result, dict):
+                total_zatoshis += result.get('transparent_balance', 0)
+                total_zatoshis += result.get('sapling_balance', 0)
+                total_zatoshis += result.get('orchard_balance', 0)
             
             # Convert zatoshis to ZEC
-            return Decimal(total_zatoshis) / Decimal(100_000_000)
+            return total_zatoshis / 100_000_000
             
         except Exception as e:
-            print(f"❌ Failed to get balance: {str(e)}")
-            return Decimal(0)
+            print(f"Error getting balance: {e}")
+            return 0.0
     
-    def get_address(self, address_type: str = "unified") -> str:
-        """Get a wallet address"""
+    def get_address(self, address_type="unified"):
+        """Get wallet address"""
         try:
-            addresses = self._run_zingo_cmd("addresses")
+            result = self._run_zingo_cmd("addresses")
             
-            if isinstance(addresses, list) and len(addresses) > 0:
-                for addr in addresses:
-                    if address_type == "unified" and addr.get("address", "").startswith("u"):
-                        return addr["address"]
-                    elif address_type == "sapling" and addr.get("address", "").startswith("z"):
-                        return addr["address"]
-                    elif address_type == "transparent" and addr.get("address", "").startswith("t"):
-                        return addr["address"]
-                
-                return addresses[0].get("address", "")
+            if isinstance(result, list):
+                for addr in result:
+                    if isinstance(addr, dict) and addr.get('address', '').startswith('u1'):
+                        return addr.get('address')
             
-            raise Exception("No addresses found in wallet")
+            # Fallback: read from file
+            address_file = Path(self.data_dir) / "faucet-address.txt"
+            if address_file.exists():
+                return address_file.read_text().strip()
+            
+            return None
             
         except Exception as e:
-            print(f"❌ Failed to get address: {str(e)}")
-            raise
+            print(f"Error getting address: {e}")
+            return None
     
-    def send_to_address(
-        self,
-        to_address: str,
-        amount: float,
-        memo: Optional[str] = None
-    ) -> Dict:
-        """
-        Send ZEC to an address - REAL BLOCKCHAIN TRANSACTION!
-        """
+    def send_to_address(self, to_address, amount, memo=""):
+        """Send ZEC to address - returns real TXID from blockchain"""
         try:
             # Convert ZEC to zatoshis
             zatoshis = int(amount * 100_000_000)
             
-            # Prepare send command
-            send_args = [to_address, str(zatoshis)]
+            # Build send command
             if memo:
-                send_args.append(memo)
+                command = f'send {to_address} {zatoshis} "{memo}"'
+            else:
+                command = f'send {to_address} {zatoshis}'
             
-            print(f"📤 Sending {amount} ZEC to {to_address}...")
-            tx_result = self._run_zingo_cmd("send", *send_args)
+            result = self._run_zingo_cmd(command)
             
-            txid = tx_result.get("txid")
+            # Extract TXID from result
+            if isinstance(result, dict):
+                txid = result.get('txid')
+                if txid:
+                    # Record transaction
+                    self._record_transaction(to_address, amount, txid, memo)
+                    return txid
             
-            if not txid:
-                raise Exception("No transaction ID returned from Zingo-CLI")
-            
-            # Record transaction in history
-            tx_record = {
-                "txid": txid,
-                "to_address": to_address,
-                "amount": amount,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
-                "memo": memo
-            }
-            
-            self.history["transactions"].append(tx_record)
-            self.history["total_sent"] += amount
-            self.history["total_requests"] += 1
-            self.save_history()
-            
-            print(f"✅ Transaction sent! TXID: {txid}")
-            
-            return {
-                "success": True,
-                "txid": txid,
-                "amount": amount,
-                "to_address": to_address,
-                "timestamp": tx_record["timestamp"]
-            }
+            raise Exception("No TXID returned from send command")
             
         except Exception as e:
-            print(f"❌ Failed to send transaction: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    def get_transaction_history(self) -> List[Dict]:
-        """Get transaction history"""
-        return self.history.get("transactions", [])
-    
-    def get_stats(self) -> Dict:
-        """Get wallet statistics"""
-        return {
-            "total_sent": self.history.get("total_sent", 0.0),
-            "total_requests": self.history.get("total_requests", 0),
-            "current_balance": float(self.get_balance()),
-            "faucet_address": self.get_address("unified")
-        }
+            raise Exception(f"Failed to send transaction: {str(e)}")
     
     def sync_wallet(self):
         """Sync wallet with blockchain"""
         try:
-            print("🔄 Syncing wallet with blockchain...")
-            self._run_zingo_cmd("sync")
-            print("✅ Wallet synced!")
+            # Run sync via docker exec with proper stdin
+            cmd = [
+                "docker", "exec", "-i", "zeckit-zingo-wallet",
+                "zingo-cli",
+                "--data-dir", self.data_dir,
+                "--server", self.lightwalletd_uri
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                input="sync run\nquit\n",
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            return True
+            
         except Exception as e:
-            print(f"❌ Sync failed: {str(e)}")
+            print(f"Sync warning: {e}")
+            return False
+    
+    def _record_transaction(self, to_address, amount, txid, memo=""):
+        """Record transaction to history file"""
+        try:
+            history = []
+            if self.history_file.exists():
+                history = json.loads(self.history_file.read_text())
+            
+            history.append({
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "to_address": to_address,
+                "amount": amount,
+                "txid": txid,
+                "memo": memo
+            })
+            
+            self.history_file.write_text(json.dumps(history, indent=2))
+            
+        except Exception as e:
+            print(f"Warning: Failed to record transaction: {e}")
+    
+    def get_transaction_history(self, limit=100):
+        """Get transaction history"""
+        try:
+            if not self.history_file.exists():
+                return []
+            
+            history = json.loads(self.history_file.read_text())
+            return history[-limit:]
+            
+        except Exception as e:
+            print(f"Error reading history: {e}")
+            return []
+    
+    def get_stats(self):
+        """Get wallet statistics"""
+        try:
+            balance = self.get_balance()
+            address = self.get_address()
+            history = self.get_transaction_history(limit=10)
+            
+            return {
+                "balance": balance,
+                "address": address,
+                "transactions_count": len(history),
+                "recent_transactions": history[-5:] if history else []
+            }
+        except Exception as e:
+            print(f"Error getting stats: {e}")
+            return {
+                "balance": 0.0,
+                "address": None,
+                "transactions_count": 0,
+                "recent_transactions": []
+            }
 
+# Singleton wallet instance
+_wallet = None
 
-# Singleton instance
-_wallet_instance = None
-
-
-def get_wallet() -> ZingoWallet:
-    """Get or create the wallet singleton"""
-    global _wallet_instance
-    if _wallet_instance is None:
-        _wallet_instance = ZingoWallet()
-    return _wallet_instance
+def get_wallet():
+    """Get wallet singleton"""
+    global _wallet
+    if _wallet is None:
+        _wallet = ZingoWallet()
+    return _wallet

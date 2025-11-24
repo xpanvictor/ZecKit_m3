@@ -1,57 +1,45 @@
-version: '3.8'
-
 services:
-  # ============================================
-  # ZEBRA - Full Node (Regtest)
-  # ============================================
   zebra:
-    image: zfnd/zebra:1.10.0
+    build:
+      context: ./docker/zebra
+      dockerfile: Dockerfile
     container_name: zeckit-zebra
     ports:
-      - "127.0.0.1:8232:8232"  # RPC port
+      - "127.0.0.1:8232:8232"
     volumes:
       - ./docker/configs/zebra.toml:/etc/zebrad/zebrad.toml:ro
       - zebra-data:/var/zebra
     environment:
-      - ZEBRA_CONF_PATH=/etc/zebrad/zebrad.toml
-    command: ["start"]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8232"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      - NETWORK=Regtest
     networks:
       - zeckit-network
+    restart: unless-stopped
 
-  # ============================================
-  # LIGHTWALLETD - Backend
-  # ============================================
   lightwalletd:
     image: electriccoinco/lightwalletd:latest
     container_name: zeckit-lightwalletd
     ports:
       - "127.0.0.1:9067:9067"
     depends_on:
-      zebra:
-        condition: service_healthy
+      - zebra
     command: [
       "--grpc-bind-addr=0.0.0.0:9067",
-      "--zcash-conf-path=/etc/lightwalletd/zcash.conf",
+      "--rpchost=zebra",
+      "--rpcport=8232",
+      "--rpcuser=zcashrpc",
+      "--rpcpassword=notsecure",
       "--log-file=/dev/stdout",
       "--log-level=7",
       "--no-tls-very-insecure=true"
     ]
     volumes:
       - lightwalletd-data:/var/lib/lightwalletd
-      - ./docker/configs/zcash.conf:/etc/lightwalletd/zcash.conf:ro
     networks:
       - zeckit-network
+    restart: unless-stopped
     profiles:
       - lwd
 
-  # ============================================
-  # ZINGO WALLET - REAL Wallet (ZingoLib)
-  # ============================================
   zingo-wallet:
     build:
       context: ./docker/zingo
@@ -60,47 +48,39 @@ services:
     volumes:
       - zingo-data:/var/zingo
     depends_on:
-      zebra:
-        condition: service_healthy
-      lightwalletd:
-        condition: service_started
+      - zebra
+      - lightwalletd
     environment:
       - ZINGO_DATA_DIR=/var/zingo
       - LIGHTWALLETD_URI=http://lightwalletd:9067
     networks:
       - zeckit-network
+    restart: unless-stopped
     profiles:
       - lwd
 
-  # ============================================
-  # FAUCET - Python API calling Zingo-CLI
-  # ============================================
   faucet:
     build:
       context: ./faucet
       dockerfile: Dockerfile
     container_name: zeckit-faucet
     ports:
-      - "127.0.0.1:8080:8080"
+      - "8080:8080"
     volumes:
-      - ./faucet/app:/app
+      - ./faucet:/app
       - zingo-data:/var/zingo:ro
-    depends_on:
-      zebra:
-        condition: service_healthy
-      zingo-wallet:
-        condition: service_started
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - LIGHTWALLETD_URI=http://lightwalletd:9067
-      - ZINGO_WALLET_PATH=/var/zingo/zingo-wallet.dat
-      - ZINGO_CLI_PATH=/usr/local/bin/zingo-cli
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    depends_on:
+      - lightwalletd
+      - zingo-wallet
     networks:
       - zeckit-network
+    restart: unless-stopped
+    profiles:
+      - lwd
+    user: "root"  # Run as root to access docker socket
 
 networks:
   zeckit-network:

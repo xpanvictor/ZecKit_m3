@@ -1,6 +1,5 @@
 use crate::error::{Result, ZecDevError};
-use std::process::{Command, Stdio};
-use std::io::{BufRead, BufReader};
+use std::process::Command;
 
 pub struct DockerCompose {
     project_dir: String,
@@ -33,6 +32,24 @@ impl DockerCompose {
         }
 
         let output = cmd.output()?;
+
+        if !output.status.success() {
+            let error = String::from_utf8_lossy(&output.stderr);
+            return Err(ZecDevError::Docker(error.to_string()));
+        }
+
+        Ok(())
+    }
+
+    pub fn up_with_profile(&self, profile: &str) -> Result<()> {
+        let output = Command::new("docker")
+            .arg("compose")
+            .arg("--profile")
+            .arg(profile)
+            .arg("up")
+            .arg("-d")
+            .current_dir(&self.project_dir)
+            .output()?;
 
         if !output.status.success() {
             let error = String::from_utf8_lossy(&output.stderr);

@@ -1,6 +1,6 @@
 FROM rust:1.85-slim-bookworm
 
-# Install dependencies
+# Install dependencies including netcat for health checks
 RUN apt-get update && apt-get install -y \
     build-essential \
     gcc \
@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     curl \
     git \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 # Clone and build zingolib

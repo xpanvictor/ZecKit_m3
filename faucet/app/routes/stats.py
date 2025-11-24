@@ -39,14 +39,17 @@ def get_stats():
     # Get last request timestamp
     last_request = tx_history[-1].get('timestamp') if tx_history else None
     
+    # Calculate total sent from history
+    total_sent = sum(tx.get('amount', 0) for tx in tx_history)
+    
     # Calculate uptime
     uptime_seconds = (datetime.utcnow() - current_app.start_time).total_seconds()
 
     return jsonify({
-        "faucet_address": wallet_stats['faucet_address'],
-        "current_balance": wallet_stats['current_balance'],
-        "total_requests": wallet_stats['total_requests'],
-        "total_sent": wallet_stats['total_sent'],
+        "faucet_address": wallet_stats.get('address', 'N/A'),
+        "current_balance": wallet_stats.get('balance', 0.0),
+        "total_requests": wallet_stats.get('transactions_count', 0),
+        "total_sent": total_sent,
         "last_request": last_request,
         "uptime": _format_uptime(uptime_seconds),
         "uptime_seconds": int(uptime_seconds),
