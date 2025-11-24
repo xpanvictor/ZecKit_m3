@@ -377,6 +377,5 @@ Dual-licensed under MIT OR Apache-2.0
 
 ---
 
-**Status:** ✅ M2 - 95% Complete  
 **Last Updated:** November 24, 2025  
 **Next:** M3 - GitHub Action & E2E Flows
