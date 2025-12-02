@@ -8,7 +8,7 @@ use serde_json::json;
 use std::process::Command;
 use tokio::time::{sleep, Duration};
 
-const MAX_WAIT_SECONDS: u64 = 1500; // 10 minutes for mining
+const MAX_WAIT_SECONDS: u64 = 1500; // 25 minutes for mining
 
 pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
@@ -27,16 +27,11 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     // Determine services to start
     let services = match backend.as_str() {
         "lwd" => vec!["zebra", "faucet"],
-        "zaino" => {
-            println!("{}", "⚠️  Zaino backend not yet implemented - use 'lwd'".yellow());
-            return Err(ZecDevError::Config(
-                "Zaino backend coming in M3".into()
-            ));
-        },
+        "zaino" => vec!["zebra", "faucet"], // ✅ ZAINO NOW SUPPORTED!
         "none" => vec!["zebra", "faucet"],
         _ => {
             return Err(ZecDevError::Config(format!(
-                "Invalid backend: {}. Use 'lwd' or 'none'", 
+                "Invalid backend: {}. Use 'lwd', 'zaino', or 'none'", 
                 backend
             )));
         }
@@ -47,6 +42,8 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     // Start with appropriate profiles
     if backend == "lwd" {
         compose.up_with_profile("lwd")?;
+    } else if backend == "zaino" {
+        compose.up_with_profile("zaino")?; // ✅ START ZAINO PROFILE!
     } else {
         compose.up(&services)?;
     }
@@ -69,8 +66,10 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     pb.set_message("⏳ Waiting for Faucet...");
     checker.wait_for_faucet(&pb).await?;
     
-    if backend == "lwd" {
-        pb.set_message("⏳ Waiting for Lightwalletd...");
+    // Wait for backend (lightwalletd or zaino)
+    if backend == "lwd" || backend == "zaino" {
+        let backend_name = if backend == "lwd" { "Lightwalletd" } else { "Zaino" };
+        pb.set_message(format!("⏳ Waiting for {}...", backend_name));
         checker.wait_for_backend(&backend, &pb).await?;
     }
     
@@ -80,11 +79,18 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     println!();
     println!("{} Generating ZIP-316 Unified Address fixtures...", "📋".cyan());
     
-    if backend == "lwd" {
+    if backend == "lwd" || backend == "zaino" {
         // Wait a bit for wallet to initialize
         sleep(Duration::from_secs(5)).await;
         
-        match generate_ua_fixtures().await {
+        // Determine backend URI for wallet commands
+        let backend_uri = if backend == "lwd" {
+            "http://lightwalletd:9067"
+        } else {
+            "http://zaino:9067"
+        };
+        
+        match generate_ua_fixtures(backend_uri).await {
             Ok(address) => {
                 println!("{} Generated UA: {}...", "✓".green(), &address[..20]);
             }
@@ -97,7 +103,7 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         // Sync wallet with blockchain
         println!();
         println!("{} Syncing wallet with blockchain...", "🔄".cyan());
-        if let Err(e) = sync_wallet().await {
+        if let Err(e) = sync_wallet(backend_uri).await {
             println!("{} Wallet sync warning: {}", "⚠️".yellow(), e);
         } else {
             println!("{} Wallet synced with blockchain", "✓".green());
@@ -165,13 +171,18 @@ async fn get_block_count(client: &Client) -> Result<u64> {
         .ok_or_else(|| ZecDevError::HealthCheck("Invalid block count response".into()))
 }
 
-async fn generate_ua_fixtures() -> Result<String> {
+async fn generate_ua_fixtures(backend_uri: &str) -> Result<String> {
     // Get address from zingo wallet
+    let cmd_str = format!(
+        "echo 'addresses\nquit' | zingo-cli --data-dir /var/zingo --server {} --nosync 2>/dev/null",
+        backend_uri
+    );
+    
     let output = Command::new("docker")
         .args(&[
             "exec", "-i", "zeckit-zingo-wallet",
             "sh", "-c",
-            "echo 'addresses\nquit' | zingo-cli --data-dir /var/zingo --server http://lightwalletd:9067 --nosync 2>/dev/null"
+            &cmd_str
         ])
         .output()
         .map_err(|e| ZecDevError::HealthCheck(format!("Docker exec failed: {}", e)))?;
@@ -209,12 +220,17 @@ async fn generate_ua_fixtures() -> Result<String> {
     Err(ZecDevError::HealthCheck("Could not parse wallet address".into()))
 }
 
-async fn sync_wallet() -> Result<()> {
+async fn sync_wallet(backend_uri: &str) -> Result<()> {
+    let cmd_str = format!(
+        "echo 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server {} 2>&1",
+        backend_uri
+    );
+    
     let output = Command::new("docker")
         .args(&[
             "exec", "-i", "zeckit-zingo-wallet",
             "sh", "-c",
-            "echo 'sync run\nquit' | zingo-cli --data-dir /var/zingo --server http://lightwalletd:9067 2>&1"
+            &cmd_str
         ])
         .output()
         .map_err(|e| ZecDevError::HealthCheck(format!("Sync command failed: {}", e)))?;
@@ -257,6 +273,8 @@ fn print_connection_info(backend: &str) {
     
     if backend == "lwd" {
         println!("  {} {}", "LightwalletD:".bold(), "http://127.0.0.1:9067");
+    } else if backend == "zaino" {
+        println!("  {} {}", "Zaino:".bold(), "http://127.0.0.1:9067");
     }
     
     println!();

@@ -1,31 +1,36 @@
-# Zaino Indexer Dockerfile
-# Builds from source for ZecKit regtest support
-
+# ========================================
+# Builder Stage
+# ========================================
 FROM rust:1.85-slim-bookworm as builder
 
-# Install build dependencies
 RUN apt-get update && apt-get install -y \
     git \
     pkg-config \
     libssl-dev \
     protobuf-compiler \
     build-essential \
-    cmake \
+    libclang-dev \
     clang \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone Zaino
 WORKDIR /build
-RUN git clone https://github.com/zingolabs/zaino.git
 
-# Build Zaino - FIXED: Binary is called 'zainod' not 'zaino-serve'
+# Clone YOUR fork with the fix
+RUN git clone https://github.com/Timi16/zaino.git
+
 WORKDIR /build/zaino
-RUN cargo build --release --bin zainod
 
-# Runtime stage
+# Checkout your fix branch
+RUN git checkout fix/regtest-insecure-grpc
+
+# Build with NO_TLS flag
+RUN cargo build --release --bin zainod --features no_tls_use_unencrypted_traffic
+
+# ========================================
+# Runtime Stage
+# ========================================
 FROM debian:bookworm-slim
 
-# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
@@ -33,26 +38,18 @@ RUN apt-get update && apt-get install -y \
     netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
-# Create zaino user
 RUN useradd -m -u 2002 -s /bin/bash zaino
 
-# Copy binary - FIXED: Copy zainod, not zaino-serve
 COPY --from=builder /build/zaino/target/release/zainod /usr/local/bin/zainod
 RUN chmod +x /usr/local/bin/zainod
 
-# Copy entrypoint
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Create data directory
 RUN mkdir -p /var/zaino && chown -R zaino:zaino /var/zaino
 
-USER zaino
 WORKDIR /var/zaino
 
-EXPOSE 9067
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-    CMD nc -z localhost 9067 || exit 1
+USER zaino
 
 ENTRYPOINT ["/entrypoint.sh"]

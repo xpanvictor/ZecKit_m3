@@ -3,28 +3,40 @@ set -e
 
 echo "🔧 Initializing Zingo Wallet..."
 
-# Wait for lightwalletd
-echo "⏳ Waiting for lightwalletd..."
+# Get backend URI from environment variable (set by docker-compose)
+BACKEND_URI=${LIGHTWALLETD_URI:-http://lightwalletd:9067}
+
+# Extract hostname from URI for health check
+BACKEND_HOST=$(echo $BACKEND_URI | sed 's|http://||' | cut -d: -f1)
+BACKEND_PORT=$(echo $BACKEND_URI | sed 's|http://||' | cut -d: -f2)
+
+echo "Configuration:"
+echo "  Backend URI:  ${BACKEND_URI}"
+echo "  Backend Host: ${BACKEND_HOST}"
+echo "  Backend Port: ${BACKEND_PORT}"
+
+# Wait for backend (lightwalletd OR zaino)
+echo "⏳ Waiting for backend (${BACKEND_HOST})..."
 MAX_ATTEMPTS=60
 ATTEMPT=0
 
 while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-    if nc -z lightwalletd 9067 2>/dev/null; then
-        echo "✅ Lightwalletd port is open!"
+    if nc -z ${BACKEND_HOST} ${BACKEND_PORT} 2>/dev/null; then
+        echo "✅ Backend port is open!"
         break
     fi
     ATTEMPT=$((ATTEMPT + 1))
-    echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - lightwalletd not ready yet..."
+    echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - backend not ready yet..."
     sleep 2
 done
 
 if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
-    echo "❌ Lightwalletd did not become ready in time"
+    echo "❌ Backend did not become ready in time"
     exit 1
 fi
 
-# Give lightwalletd time to initialize
-echo "⏳ Giving lightwalletd 30 seconds to fully initialize..."
+# Give backend time to initialize
+echo "⏳ Giving backend 30 seconds to fully initialize..."
 sleep 30
 
 # Create wallet if doesn't exist
@@ -33,7 +45,7 @@ if [ ! -f "/var/zingo/zingo-wallet.dat" ]; then
     
     # Just initialize the wallet
     zingo-cli --data-dir /var/zingo \
-              --server http://lightwalletd:9067 \
+              --server ${BACKEND_URI} \
               --nosync << 'EOF'
 quit
 EOF
@@ -42,7 +54,7 @@ EOF
     
     # Get wallet address
     WALLET_ADDRESS=$(zingo-cli --data-dir /var/zingo \
-                               --server http://lightwalletd:9067 \
+                               --server ${BACKEND_URI} \
                                --nosync << 'EOF' | grep -oP '"address":\s*"\K[^"]+' | head -1
 addresses
 quit
@@ -58,7 +70,7 @@ fi
 # Sync wallet (ignore errors if no blocks yet)
 echo "🔄 Syncing wallet (will complete after blocks are mined)..."
 zingo-cli --data-dir /var/zingo \
-          --server http://lightwalletd:9067 << 'EOF' || true
+          --server ${BACKEND_URI} << 'EOF' || true
 sync run
 quit
 EOF
