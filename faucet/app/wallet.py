@@ -16,25 +16,17 @@ class ZingoWallet:
         print(f"  Data dir: {self.data_dir}")
         print(f"  Backend URI: {self.lightwalletd_uri}")
         
-    def _run_zingo_cmd(self, command, timeout=30):
+    def _run_zingo_cmd(self, command, timeout=30, nosync=True):
         """Run zingo-cli command via docker exec"""
         try:
             wallet_container = os.getenv('WALLET_CONTAINER', 'zeckit-zingo-wallet')
             
-            # Use bash -c with echo -e to properly send commands
-            cmd_str = f'echo -e "{command}\\nquit" | zingo-cli --data-dir {self.data_dir} --server {self.lightwalletd_uri} --chain regtest --nosync'
+            sync_flag = "--nosync" if nosync else ""
+            cmd_str = f'echo -e "{command}\\nquit" | zingo-cli --data-dir {self.data_dir} --server {self.lightwalletd_uri} --chain regtest {sync_flag}'
             
-            cmd = [
-                "docker", "exec", wallet_container,
-                "bash", "-c", cmd_str
-            ]
+            cmd = ["docker", "exec", wallet_container, "bash", "-c", cmd_str]
             
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
             
             if result.returncode != 0:
                 raise Exception(f"Command failed: {result.stderr}")
@@ -50,7 +42,6 @@ class ZingoWallet:
                     except:
                         continue
             
-            # Return raw output for parsing
             return {"output": output}
             
         except subprocess.TimeoutExpired:
@@ -61,15 +52,13 @@ class ZingoWallet:
     def get_balance(self):
         """Get wallet balance in ZEC"""
         try:
-            result = self._run_zingo_cmd("balance")
+            result = self._run_zingo_cmd("balance", nosync=True)
             
             total_zatoshis = 0
             
-            # Handle the custom format output
             if isinstance(result, dict) and 'output' in result:
                 output = result['output']
                 
-                # Parse confirmed balances
                 patterns = [
                     r'confirmed_transparent_balance:\s*([\d_]+)',
                     r'confirmed_sapling_balance:\s*([\d_]+)',
@@ -91,12 +80,10 @@ class ZingoWallet:
     def get_address(self, address_type="unified"):
         """Get wallet address"""
         try:
-            result = self._run_zingo_cmd("addresses")
+            result = self._run_zingo_cmd("addresses", nosync=True)
             
             if isinstance(result, dict) and 'output' in result:
                 output = result['output']
-                
-                # Parse first UA
                 match = re.search(r'uregtest1[a-z0-9]{70,}', output)
                 if match:
                     return match.group(0)
@@ -107,67 +94,86 @@ class ZingoWallet:
             print(f"❌ Error getting address: {e}")
             return None
     
-    def shield_funds(self):
-        """Shield all transparent funds to shielded pools"""
-        try:
-            print("🔄 Shielding transparent funds...")
-            result = self._run_zingo_cmd("shield", timeout=60)
-            
-            if isinstance(result, dict) and 'output' in result:
-                output = result['output']
-                
-                if "error" in output:
-                    raise Exception(output)
-                
-                # Extract TXID from shield response
-                match = re.search(r'[0-9a-f]{64}', output)
-                if match:
-                    txid = match.group(0)
-                    print(f"✅ Shielding successful: TXID {txid}")
-                    return txid
-            
-            raise Exception("No TXID in shield response")
-            
-        except Exception as e:
-            print(f"❌ Shielding failed: {e}")
-            return None
-    
     def send_to_address(self, to_address: str, amount: float, memo: str = None):
-        """Send REAL transaction"""
+        """Send REAL transaction - quicksend only works with shielded funds!"""
         try:
-            # First, shield any transparent funds
-            self.shield_funds()
-            
-            # Wait for shielding to confirm (simple sleep - improve in production)
-            time.sleep(30)
-            
-            # Now send from shielded
             amount_sats = int(amount * 100_000_000)
-            cmd = f"send {to_address} {amount_sats}"
-            if memo:
-                cmd += f' "{memo}"'
+            wallet_container = os.getenv('WALLET_CONTAINER', 'zeckit-zingo-wallet')
             
-            result = self._run_zingo_cmd(cmd, timeout=60)
+            print(f"📤 Sending {amount} ZEC to {to_address[:12]}...")
             
-            if isinstance(result, dict) and 'output' in result:
-                output = result['output']
-                
-                # Extract TXID
-                match = re.search(r'[0-9a-f]{64}', output)
-                if match:
-                    txid = match.group(0)
-                    timestamp = datetime.utcnow().isoformat() + "Z"
-                    self._record_transaction(to_address, amount, txid, memo)
-                    print(f"✅ Transaction successful: {txid}")
-                    return {
-                        "success": True,
-                        "txid": txid,
-                        "timestamp": timestamp
-                    }
-                
-            raise Exception(f"No TXID in response: {result.get('output', '')}")
+            # Step 1: Stop background sync
+            print("🛑 Stopping background sync...")
+            subprocess.run(["docker", "exec", wallet_container, "pkill", "-f", "zingo-cli"], capture_output=True)
+            time.sleep(3)
+            
+            # Step 2: Shield all transparent funds (quicksend only works with shielded!)
+            print("🛡️ Shielding transparent funds...")
+            shield_cmd = f'echo -e "quickshield\\nquit" | zingo-cli --data-dir {self.data_dir} --server {self.lightwalletd_uri} --chain regtest'
+            shield_result = subprocess.run(
+                ["docker", "exec", wallet_container, "bash", "-c", shield_cmd],
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            print(f"🛡️ Shield result: {shield_result.stdout[:200]}")
+            
+            # Check if shielding succeeded
+            shield_match = re.search(r'[0-9a-f]{64}', shield_result.stdout)
+            if not shield_match:
+                # Check if there's nothing to shield
+                if "no transparent" in shield_result.stdout.lower() or "nothing to shield" in shield_result.stdout.lower():
+                    print("ℹ️ No transparent funds to shield (already shielded)")
+                else:
+                    raise Exception(f"Shield failed: {shield_result.stdout[:300]}")
+            else:
+                print(f"✅ Shielded! TXID: {shield_match.group(0)[:16]}...")
+            
+            # Step 3: Wait for shielding to confirm
+            print("⏳ Waiting 15s for shield tx to confirm...")
+            time.sleep(15)
+            
+            # Step 4: Send from shielded pool
+            print(f"💸 Sending {amount} ZEC from shielded pool...")
+            if memo and not (to_address.startswith('tm') or to_address.startswith('t1') or to_address.startswith('t3')):
+                send_cmd = f'echo -e "quicksend {to_address} {amount_sats} \\"{memo}\\"\\nquit" | zingo-cli --data-dir {self.data_dir} --server {self.lightwalletd_uri} --chain regtest'
+            else:
+                send_cmd = f'echo -e "quicksend {to_address} {amount_sats}\\nquit" | zingo-cli --data-dir {self.data_dir} --server {self.lightwalletd_uri} --chain regtest'
+            
+            result = subprocess.run(
+                ["docker", "exec", wallet_container, "bash", "-c", send_cmd],
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            
+            if result.returncode != 0:
+                raise Exception(f"Send command failed: {result.stderr}")
+            
+            output = result.stdout.strip()
+            print(f"📋 Send result: {output[:300]}")
+            
+            # Extract TXID
+            match = re.search(r'[0-9a-f]{64}', output)
+            if match:
+                txid = match.group(0)
+                timestamp = datetime.utcnow().isoformat() + "Z"
+                self._record_transaction(to_address, amount, txid, memo)
+                print(f"✅ Transaction successful: {txid}")
+                return {
+                    "success": True,
+                    "txid": txid,
+                    "timestamp": timestamp
+                }
+            
+            # Check for errors
+            if "error" in output.lower():
+                raise Exception(f"Send failed: {output}")
+            
+            raise Exception(f"No TXID in response: {output[:300]}")
             
         except Exception as e:
+            print(f"❌ Send failed: {e}")
             return {
                 "success": False,
                 "error": str(e)
