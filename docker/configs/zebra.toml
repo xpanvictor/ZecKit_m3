@@ -7,6 +7,13 @@ listen_addr = "0.0.0.0:8233"
 initial_mainnet_peers = []
 initial_testnet_peers = []
 
+# CRITICAL: Set activation heights for regtest
+[network.testnet_parameters.activation_heights]
+Canopy = 1
+NU5 = 1
+NU6 = 1
+"NU6.1" = 1
+
 [consensus]
 checkpoint_sync = false
 
@@ -29,7 +36,7 @@ flamegraph = "Off"
 [mining]
 # INTERNAL MINER - Automatically mines blocks in regtest
 internal_miner = true
-miner_address = "tmTCghvZEYEEHvccMN55PYhsUDec3nPF9YM"
+miner_address = "tmNVuLybsmGAujNKVNWKn38xgPP6CtDrAUt"
 
 [metrics]
 # Disable Prometheus metrics

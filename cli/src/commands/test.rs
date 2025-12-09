@@ -233,8 +233,8 @@ async fn test_faucet_request(client: &Client) -> Result<()> {
         
         println!("    {} Balance: {} ZEC", "💰".cyan(), balance);
         
-        if balance < 1.0 {
-            println!("    {} Insufficient balance for test (need 1.0 ZEC)", "⚠".yellow());
+        if balance < 0.1 {
+            println!("    {} Insufficient balance for test (need 0.1 ZEC)", "⚠".yellow());
             println!("    {} SKIP (wallet needs funds - this is expected on fresh start)", "→".yellow());
             println!();
             print!("  [5/5] Faucet funding request... ");
@@ -277,14 +277,14 @@ async fn test_faucet_request(client: &Client) -> Result<()> {
             "Invalid fixture address".into()
         ))?;
     
-    println!("    {} Sending 1.0 ZEC to {}...", "↻".cyan(), &test_address[..10]);
+    println!("    {} Sending 0.1 ZEC to {}...", "↻".cyan(), &test_address[..10]);
     
     // Step 5: Test funding request
     let resp = client
         .post("http://127.0.0.1:8080/request")
         .json(&serde_json::json!({
             "address": test_address,
-            "amount": 1.0
+            "amount": 0.1
         }))
         .timeout(Duration::from_secs(45))
         .send()

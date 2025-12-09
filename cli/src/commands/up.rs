@@ -9,7 +9,7 @@ use std::process::Command;
 use std::fs;
 use tokio::time::{sleep, Duration};
 
-const MAX_WAIT_SECONDS: u64 = 2000; // 3 minutes for mining
+const MAX_WAIT_SECONDS: u64 = 2000;
 
 pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
@@ -19,13 +19,11 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     
     let compose = DockerCompose::new()?;
     
-    // Fresh start if requested
     if fresh {
         println!("{}", "🧹 Cleaning up old data...".yellow());
         compose.down(true)?;
     }
     
-    // Determine services to start
     let services = match backend.as_str() {
         "lwd" => vec!["zebra", "faucet"],
         "zaino" => vec!["zebra", "faucet"],
@@ -40,7 +38,6 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     
     println!("{} Starting services: {}", "🚀".green(), services.join(", "));
     
-    // Start with appropriate profiles
     if backend == "lwd" {
         compose.up_with_profile("lwd")?;
     } else if backend == "zaino" {
@@ -49,7 +46,6 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         compose.up(&services)?;
     }
     
-    // Health checks with progress
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::default_spinner()
@@ -64,7 +60,6 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     pb.set_message("⏳ Waiting for Faucet...");
     checker.wait_for_faucet(&pb).await?;
     
-    // Wait for backend (lightwalletd or zaino)
     if backend == "lwd" || backend == "zaino" {
         let backend_name = if backend == "lwd" { "Lightwalletd" } else { "Zaino" };
         pb.set_message(format!("⏳ Waiting for {}...", backend_name));
@@ -73,35 +68,36 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     
     pb.finish_with_message("✓ Services starting...".green().to_string());
     
-    // Determine backend URI for wallet commands
     let backend_uri = if backend == "lwd" {
         "http://lightwalletd:9067"
     } else if backend == "zaino" {
         "http://zaino:9067"
     } else {
-        "http://lightwalletd:9067" // fallback
+        "http://lightwalletd:9067"
     };
     
-    // CRITICAL: Update Zebra miner address to wallet's transparent address
+    // WAIT FOR WALLET FIRST (before mining!)
+    println!();
+    println!("{} Waiting for wallet to initialize...", "⏳".cyan());
+    pb.set_message("⏳ Wallet starting...");
+    wait_for_wallet_ready(&pb, backend_uri).await?;
+    pb.finish_with_message("✓ Wallet ready".green().to_string());
+    
+    // GET WALLET ADDRESS AND UPDATE ZEBRA CONFIG
     println!();
     println!("{} Configuring Zebra to mine to wallet...", "⚙️".cyan());
-    
-    // Wait for wallet to initialize
-    sleep(Duration::from_secs(10)).await;
     
     match get_wallet_transparent_address(backend_uri).await {
         Ok(t_address) => {
             println!("{} Wallet transparent address: {}", "✓".green(), t_address);
             
-            // Update zebra.toml
             if let Err(e) = update_zebra_miner_address(&t_address) {
                 println!("{} Warning: Could not update zebra.toml: {}", "⚠️".yellow(), e);
             } else {
                 println!("{} Updated zebra.toml miner_address", "✓".green());
                 
-                // Restart Zebra to apply new config
                 println!("{} Restarting Zebra with new miner address...", "🔄".yellow());
-                if let Err(e) = restart_zebra(&compose).await {
+                if let Err(e) = restart_zebra().await {
                     println!("{} Warning: Zebra restart had issues: {}", "⚠️".yellow(), e);
                 }
             }
@@ -112,10 +108,15 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         }
     }
     
-    // Wait for internal miner to produce blocks (M2 requirement: pre-mined funds)
+    // NOW WAIT FOR BLOCKS (mining to correct address)
     wait_for_mined_blocks(&pb, 101).await?;
     
-    // Generate UA fixtures (M2 requirement: ZIP-316 fixtures)
+    // Wait extra time for coinbase maturity
+    println!();
+    println!("{} Waiting for coinbase maturity (100 confirmations)...", "⏳".yellow());
+    sleep(Duration::from_secs(120)).await;
+    
+    // Generate UA fixtures
     println!();
     println!("{} Generating ZIP-316 Unified Address fixtures...", "📋".cyan());
     
@@ -129,7 +130,7 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         }
     }
     
-    // Sync wallet with blockchain
+    // Sync wallet
     println!();
     println!("{} Syncing wallet with blockchain...", "🔄".cyan());
     if let Err(e) = sync_wallet(backend_uri).await {
@@ -138,7 +139,7 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         println!("{} Wallet synced with blockchain", "✓".green());
     }
     
-    // Check final balance
+    // Check balance
     println!();
     println!("{} Checking wallet balance...", "💰".cyan());
     match check_wallet_balance().await {
@@ -146,19 +147,48 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
             println!("{} Wallet has {} ZEC available", "✓".green(), balance);
         }
         Ok(_) => {
-            println!("{} Wallet synced but balance not yet available (blocks maturing)", "⚠️".yellow());
-            println!("   {} Wait a few minutes for coinbase maturity (100 confirmations)", "→".yellow());
+            println!("{} Wallet synced but balance not yet available", "⚠️".yellow());
+            println!("   {} Blocks still maturing, wait a few more minutes", "→".yellow());
         }
         Err(e) => {
             println!("{} Could not check balance: {}", "⚠️".yellow(), e);
         }
     }
     
-    // Display connection info
     print_connection_info(&backend);
     print_mining_info().await?;
     
     Ok(())
+}
+
+async fn wait_for_wallet_ready(pb: &ProgressBar, backend_uri: &str) -> Result<()> {
+    let start = std::time::Instant::now();
+    
+    loop {
+        pb.tick();
+        
+        let cmd_str = format!(
+            "bash -c \"echo -e 't_addresses\\nquit' | zingo-cli --data-dir /var/zingo --server {} --chain regtest --nosync 2>&1\"",
+            backend_uri
+        );
+        
+        let output = Command::new("docker")
+            .args(&["exec", "zeckit-zingo-wallet", "bash", "-c", &cmd_str])
+            .output();
+        
+        if let Ok(out) = output {
+            let output_str = String::from_utf8_lossy(&out.stdout);
+            if output_str.contains("tm") && output_str.contains("encoded_address") {
+                return Ok(());
+            }
+        }
+        
+        if start.elapsed().as_secs() > 60 {
+            return Err(ZecDevError::ServiceNotReady("Wallet not ready after 60s".into()));
+        }
+        
+        sleep(Duration::from_secs(2)).await;
+    }
 }
 
 async fn wait_for_mined_blocks(pb: &ProgressBar, min_blocks: u64) -> Result<()> {
@@ -180,9 +210,7 @@ async fn wait_for_mined_blocks(pb: &ProgressBar, min_blocks: u64) -> Result<()> 
                     height, min_blocks
                 ));
             }
-            Err(_) => {
-                // Keep waiting during startup
-            }
+            Err(_) => {}
         }
         
         if start.elapsed().as_secs() > MAX_WAIT_SECONDS {
@@ -228,17 +256,14 @@ async fn get_wallet_transparent_address(backend_uri: &str) -> Result<String> {
     
     let output_str = String::from_utf8_lossy(&output.stdout);
     
-    // Look for tm (transparent regtest) address
     for line in output_str.lines() {
         if line.contains("\"encoded_address\"") && line.contains("tm") {
-            // Extract transparent address
             if let Some(start) = line.find("tm") {
                 let addr_part = &line[start..];
                 let end = addr_part.find(|c: char| c == '"' || c == '\n' || c == ' ')
                     .unwrap_or(addr_part.len());
                 let address = &addr_part[..end];
                 
-                // Validate it's a proper address
                 if address.starts_with("tm") && address.len() > 30 {
                     return Ok(address.to_string());
                 }
@@ -252,33 +277,27 @@ async fn get_wallet_transparent_address(backend_uri: &str) -> Result<String> {
 fn update_zebra_miner_address(address: &str) -> Result<()> {
     let zebra_config_path = "docker/configs/zebra.toml";
     
-    // Read current config
     let config = fs::read_to_string(zebra_config_path)
         .map_err(|e| ZecDevError::Config(format!("Could not read zebra.toml: {}", e)))?;
     
-    // Replace miner_address line
     let new_config = if config.contains("miner_address") {
-        // Replace existing miner_address
         use regex::Regex;
         let re = Regex::new(r#"miner_address = "tm[a-zA-Z0-9]+""#).unwrap();
         re.replace(&config, format!("miner_address = \"{}\"", address)).to_string()
     } else {
-        // Add miner_address to [mining] section
         config.replace(
             "[mining]",
             &format!("[mining]\nminer_address = \"{}\"", address)
         )
     };
     
-    // Write back
     fs::write(zebra_config_path, new_config)
         .map_err(|e| ZecDevError::Config(format!("Could not write zebra.toml: {}", e)))?;
     
     Ok(())
 }
 
-async fn restart_zebra(compose: &DockerCompose) -> Result<()> {
-    // Restart zebra container
+async fn restart_zebra() -> Result<()> {
     let output = Command::new("docker")
         .args(&["restart", "zeckit-zebra"])
         .output()
@@ -288,7 +307,6 @@ async fn restart_zebra(compose: &DockerCompose) -> Result<()> {
         return Err(ZecDevError::Docker("Zebra restart failed".into()));
     }
     
-    // Wait for Zebra to be healthy again
     sleep(Duration::from_secs(15)).await;
     
     Ok(())
@@ -307,7 +325,6 @@ async fn generate_ua_fixtures(backend_uri: &str) -> Result<String> {
     
     let output_str = String::from_utf8_lossy(&output.stdout);
     
-    // Look for uregtest address in output
     for line in output_str.lines() {
         if line.contains("uregtest") {
             if let Some(start) = line.find("uregtest") {
@@ -316,7 +333,6 @@ async fn generate_ua_fixtures(backend_uri: &str) -> Result<String> {
                     .unwrap_or(addr_part.len());
                 let address = &addr_part[..end];
                 
-                // Save fixture
                 let fixture = json!({
                     "faucet_address": address,
                     "type": "unified",

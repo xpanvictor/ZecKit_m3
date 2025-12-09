@@ -17,7 +17,7 @@ class BaseConfig:
     LIGHTWALLETD_URI = os.environ.get('LIGHTWALLETD_URI', 'http://lightwalletd:9067')
     
     # Faucet Limits
-    FAUCET_AMOUNT_MIN = float(os.environ.get('FAUCET_AMOUNT_MIN', '1.0'))
+    FAUCET_AMOUNT_MIN = float(os.environ.get('FAUCET_AMOUNT_MIN', '0.01'))  # Changed from 1.0
     FAUCET_AMOUNT_MAX = float(os.environ.get('FAUCET_AMOUNT_MAX', '100.0'))
     FAUCET_AMOUNT_DEFAULT = float(os.environ.get('FAUCET_AMOUNT_DEFAULT', '10.0'))
     
