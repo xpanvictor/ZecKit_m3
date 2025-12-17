@@ -6,6 +6,11 @@ RUN apt-get update && apt-get install -y \
     git \
     curl \
     netcat-openbsd \
+    libclang-dev \
+    clang \
+    llvm \
+    cmake \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 # Clone and build Zaino indexer
