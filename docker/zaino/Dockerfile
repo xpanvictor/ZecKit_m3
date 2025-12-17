@@ -1,29 +1,25 @@
-# docker/zingo-wallet/Dockerfile
+# docker/zaino/Dockerfile
 FROM rust:1.85-slim-bookworm
 
 RUN apt-get update && apt-get install -y \
     build-essential \
-    gcc \
-    protobuf-compiler \
-    libssl-dev \
-    curl \
     git \
+    curl \
     netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone OFFICIAL zingolib dev branch with the latest fixes
+# Clone and build Zaino indexer
 WORKDIR /build
-RUN git clone https://github.com/zingolabs/zingolib.git && \
-    cd zingolib && \
-    git checkout dev && \
-    rustup set profile minimal && \
-    cargo build --release --package zingo-cli && \
-    mv target/release/zingo-cli /usr/local/bin/ && \
-    chmod +x /usr/local/bin/zingo-cli
+RUN git clone https://github.com/zingolabs/zaino.git && \
+    cd zaino && \
+    cargo build --release --bin zainod && \
+    mv target/release/zainod /usr/local/bin/ && \
+    chmod +x /usr/local/bin/zainod
 
-RUN mkdir -p /var/zingo && chmod 777 /var/zingo
+# Create data directory
+RUN mkdir -p /var/zaino && chmod 777 /var/zaino
 
-WORKDIR /var/zingo
+WORKDIR /var/zaino
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
