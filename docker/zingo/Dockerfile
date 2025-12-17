@@ -11,15 +11,14 @@ RUN apt-get update && apt-get install -y \
     netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone OFFICIAL zingolib dev branch with the latest fixes
 WORKDIR /build
 RUN git clone https://github.com/zingolabs/zingolib.git && \
     cd zingolib && \
     git checkout dev && \
-    rustup set profile minimal && \
-    cargo build --release --package zingo-cli && \
+    cargo build --release --package zingo-cli --jobs 1 && \
     mv target/release/zingo-cli /usr/local/bin/ && \
-    chmod +x /usr/local/bin/zingo-cli
+    chmod +x /usr/local/bin/zingo-cli && \
+    rm -rf /build  # Clean up to save space
 
 RUN mkdir -p /var/zingo && chmod 777 /var/zingo
 
