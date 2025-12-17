@@ -1,6 +1,7 @@
 use crate::error::{Result, ZecDevError};
 use std::process::Command;
 
+#[derive(Clone)]
 pub struct DockerCompose {
     project_dir: String,
 }
