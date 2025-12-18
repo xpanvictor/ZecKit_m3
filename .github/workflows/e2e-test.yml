@@ -86,7 +86,7 @@ jobs:
           echo "  Starting ZecKit Devnet"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          timeout 600 ./cli/target/release/zecdev up --backend zaino --fresh || {
+          ./cli/target/release/zecdev up --backend zaino --fresh || {
             echo "✗ Devnet startup failed!"
             echo ""
             echo "Container logs:"
