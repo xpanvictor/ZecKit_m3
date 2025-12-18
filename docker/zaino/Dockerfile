@@ -1,33 +1,55 @@
-# docker/zaino/Dockerfile
-FROM rust:1.85-slim-bookworm
+# ========================================
+# Builder Stage
+# ========================================
+FROM rust:1.85-slim-bookworm as builder
 
 RUN apt-get update && apt-get install -y \
-    build-essential \
     git \
-    curl \
-    netcat-openbsd \
+    pkg-config \
+    libssl-dev \
+    protobuf-compiler \
+    build-essential \
     libclang-dev \
     clang \
-    llvm \
-    cmake \
-    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone and build Zaino indexer FROM THE FIX BRANCH
 WORKDIR /build
-RUN git clone https://github.com/Timi16/zaino.git && \
-    cd zaino && \
-    git checkout fix/regtest-insecure-grpc && \
-    CARGO_BUILD_JOBS=1 cargo build --release --bin zainod && \
-    mv target/release/zainod /usr/local/bin/ && \
-    chmod +x /usr/local/bin/zainod && \
-    rm -rf /build
 
-RUN mkdir -p /var/zaino && chmod 777 /var/zaino
+# Clone YOUR fork with the fix
+RUN git clone https://github.com/Timi16/zaino.git
 
-WORKDIR /var/zaino
+WORKDIR /build/zaino
+
+# Checkout your fix branch
+RUN git checkout fix/regtest-insecure-grpc
+
+# Build with NO_TLS flag
+RUN cargo build --release --bin zainod --features no_tls_use_unencrypted_traffic
+
+# ========================================
+# Runtime Stage
+# ========================================
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    curl \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 2002 -s /bin/bash zaino
+
+COPY --from=builder /build/zaino/target/release/zainod /usr/local/bin/zainod
+RUN chmod +x /usr/local/bin/zainod
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+RUN mkdir -p /var/zaino && chown -R zaino:zaino /var/zaino
+
+WORKDIR /var/zaino
+
+USER zaino
 
 ENTRYPOINT ["/entrypoint.sh"]

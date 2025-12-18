@@ -104,6 +104,7 @@ services:
     restart: unless-stopped
     profiles:
       - zaino
+    user: "0:0"
 
   # ========================================
   # ZINGO WALLET - LWD Profile
