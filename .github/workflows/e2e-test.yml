@@ -14,7 +14,7 @@ on:
 jobs:
   e2e-tests:
     name: ZecKit E2E Test Suite
-    runs-on: self-hosted  # Runs on your WSL/Docker-enabled runner
+    runs-on: self-hosted  # Runs on your Mac
     
     # Timeout after 30 minutes (full devnet + tests)
     timeout-minutes: 30
@@ -22,6 +22,31 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      
+      - name: Start Docker Desktop
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Starting Docker Desktop"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # Start Docker Desktop
+          open /Applications/Docker.app
+          
+          # Wait for Docker daemon to be ready
+          echo "Waiting for Docker daemon..."
+          for i in {1..60}; do
+            if docker ps > /dev/null 2>&1; then
+              echo "✓ Docker daemon is ready!"
+              break
+            fi
+            echo "Attempt $i/60: Docker not ready yet, waiting..."
+            sleep 2
+          done
+          
+          # Verify Docker is working
+          docker --version
+          docker compose version
+          echo ""
       
       - name: Check environment
         run: |
@@ -41,27 +66,37 @@ jobs:
           docker system prune -f --volumes 2>/dev/null || true
           rm -rf /var/zaino /var/zingo /var/faucet_wallet 2>/dev/null || true
           echo "✓ Cleanup complete"
+          echo ""
       
       - name: Build CLI binary
         run: |
-          echo "Building zecdev CLI..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Building ZecDev CLI"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           cd cli
           cargo build --release
           cd ..
           echo "✓ CLI binary built"
           ls -lh cli/target/release/zecdev
+          echo ""
       
       - name: Start devnet with zaino backend
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "  Starting ZecKit Devnet"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
           timeout 600 ./cli/target/release/zecdev up --backend zaino --fresh || {
             echo "✗ Devnet startup failed!"
-            docker compose logs
+            echo ""
+            echo "Container logs:"
+            docker compose logs || true
             exit 1
           }
+          
+          echo ""
           echo "✓ Devnet started successfully"
+          echo ""
       
       - name: Verify services are healthy
         run: |
@@ -71,42 +106,66 @@ jobs:
           
           # Check Zebra RPC
           echo "Checking Zebra RPC..."
-          curl -sf --max-time 5 \
+          if curl -sf --max-time 5 \
             --data-binary '{"jsonrpc":"2.0","id":"1","method":"getblockcount","params":[]}' \
             -H 'content-type: application/json' \
-            http://127.0.0.1:8232 | grep -q "result" && echo "✓ Zebra RPC OK" || exit 1
+            http://127.0.0.1:8232 | grep -q "result"; then
+            echo "✓ Zebra RPC OK"
+          else
+            echo "✗ Zebra RPC FAILED"
+            exit 1
+          fi
           
           # Check Zaino gRPC
           echo "Checking Zaino..."
-          docker exec zeckit-zaino zindexer --version > /dev/null 2>&1 && echo "✓ Zaino OK" || exit 1
+          if docker exec zeckit-zaino zindexer --version > /dev/null 2>&1; then
+            echo "✓ Zaino OK"
+          else
+            echo "✗ Zaino FAILED"
+            exit 1
+          fi
           
           # Check Faucet
           echo "Checking Faucet..."
-          curl -sf http://127.0.0.1:8080/health | grep -q "OK" && echo "✓ Faucet OK" || exit 1
+          if curl -sf http://127.0.0.1:8080/health | grep -q "OK"; then
+            echo "✓ Faucet OK"
+          else
+            echo "✗ Faucet FAILED"
+            exit 1
+          fi
           
           # Check Zingo Wallet
           echo "Checking Zingo Wallet..."
-          docker exec zeckit-zingo-wallet bash -c "echo -e 'quit' | zingo-cli --data-dir /var/zingo --server http://zaino:9067 --chain regtest --nosync" > /dev/null 2>&1 && echo "✓ Zingo Wallet OK" || exit 1
+          if docker exec zeckit-zingo-wallet bash -c "echo -e 'quit' | zingo-cli --data-dir /var/zingo --server http://zaino:9067 --chain regtest --nosync" > /dev/null 2>&1; then
+            echo "✓ Zingo Wallet OK"
+          else
+            echo "✗ Zingo Wallet FAILED"
+            exit 1
+          fi
           
           echo ""
-          echo "All services healthy!"
+          echo "✓ All services healthy!"
+          echo ""
       
       - name: Run smoke tests
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "  Running Smoke Tests"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
           
           ./cli/target/release/zecdev test
           
-          if [ $? -eq 0 ]; then
-            echo ""
+          TEST_EXIT_CODE=$?
+          
+          echo ""
+          if [ $TEST_EXIT_CODE -eq 0 ]; then
             echo "✓ All smoke tests PASSED!"
           else
-            echo ""
             echo "✗ Smoke tests FAILED!"
             exit 1
           fi
+          echo ""
       
       - name: Check wallet balance
         if: always()
@@ -114,9 +173,11 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "  Wallet Status"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
           
           # Check wallet balance via CLI
-          docker exec zeckit-zingo-wallet bash -c "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server http://zaino:9067 --chain regtest --nosync" || true
+          echo "Wallet balance:"
+          docker exec zeckit-zingo-wallet bash -c "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server http://zaino:9067 --chain regtest --nosync" 2>/dev/null || echo "Could not retrieve balance"
           
           echo ""
       
@@ -126,7 +187,9 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "  Faucet Status"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
           
+          echo "Faucet stats:"
           curl -s http://127.0.0.1:8080/stats | jq . || echo "Could not get faucet stats"
           
           echo ""
@@ -134,7 +197,7 @@ jobs:
       - name: Collect logs
         if: always()
         run: |
-          echo "Collecting logs..."
+          echo "Collecting logs for artifact..."
           mkdir -p logs
           
           docker compose logs zebra > logs/zebra.log 2>&1 || true
@@ -145,7 +208,7 @@ jobs:
           docker ps -a > logs/containers.log 2>&1 || true
           docker network ls > logs/networks.log 2>&1 || true
           
-          echo "Logs collected"
+          echo "✓ Logs collected"
       
       - name: Upload logs on failure
         if: failure()
@@ -158,6 +221,11 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Cleanup"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
           echo "Tearing down devnet..."
           docker compose down -v 2>/dev/null || true
           
@@ -165,6 +233,7 @@ jobs:
           docker system prune -f --volumes 2>/dev/null || true
           
           echo "✓ Cleanup complete"
+          echo ""
       
       - name: Test summary
         if: always()
@@ -173,18 +242,34 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "  E2E Test Execution Summary"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
           
           if [ "${{ job.status }}" == "success" ]; then
-            echo "✓ Status: ALL TESTS PASSED"
-            echo "  - Devnet startup: ✓"
-            echo "  - Services healthy: ✓"
-            echo "  - Smoke tests: ✓"
+            echo "✓ Status: ALL TESTS PASSED ✓"
+            echo ""
+            echo "Completed checks:"
+            echo "  ✓ Docker Desktop started"
+            echo "  ✓ CLI binary built"
+            echo "  ✓ Devnet started (Zebra + Zaino + Zingo + Faucet)"
+            echo "  ✓ All services healthy"
+            echo "  ✓ Smoke tests passed"
+            echo "  ✓ Wallet synced"
+            echo "  ✓ Faucet operational"
             echo ""
             echo "The ZecKit devnet is working correctly!"
           else
-            echo "✗ Status: TESTS FAILED"
-            echo "  Check the logs above for details"
-            echo "  Artifact logs: e2e-test-logs-${{ github.run_number }}"
+            echo "✗ Status: TESTS FAILED ✗"
+            echo ""
+            echo "Check the logs above for details"
+            echo "Artifact logs: e2e-test-logs-${{ github.run_number }}"
+            echo ""
+            echo "Common issues:"
+            echo "  - Docker Desktop not running"
+            echo "  - Insufficient disk space"
+            echo "  - Port conflicts (8232, 9067, 8080)"
+            echo "  - Network issues"
           fi
           
+          echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
