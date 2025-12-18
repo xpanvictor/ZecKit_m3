@@ -11,6 +11,7 @@ use std::io::{self, Write};
 use tokio::time::{sleep, Duration};
 
 const MAX_WAIT_SECONDS: u64 = 60000;
+const WALLET_TIMEOUT_SECONDS: u64 = 6000;
 
 pub async fn execute(backend: String, fresh: bool) -> Result<()> {
     println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
@@ -127,7 +128,7 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         println!();
     }
     
-    // [3/4] Wallet with percentage
+    // [3/4] Wallet with percentage (EXTENDED TIMEOUT)
     let backend_uri = if backend == "lwd" {
         "http://lightwalletd:9067"
     } else if backend == "zaino" {
@@ -146,13 +147,13 @@ pub async fn execute(backend: String, fresh: bool) -> Result<()> {
         }
         
         let elapsed = start.elapsed().as_secs();
-        if elapsed < 60 {
-            let progress = (elapsed as f64 / 60.0 * 100.0).min(99.0) as u32;
+        if elapsed < WALLET_TIMEOUT_SECONDS {
+            let progress = (elapsed as f64 / WALLET_TIMEOUT_SECONDS as f64 * 100.0).min(99.0) as u32;
             print!("\r[3/4] Starting Zingo Wallet... {}%", progress);
             io::stdout().flush().ok();
             sleep(Duration::from_secs(1)).await;
         } else {
-            return Err(ZecDevError::ServiceNotReady("Wallet not ready".into()));
+            return Err(ZecDevError::ServiceNotReady("Wallet not ready after 100 minutes".into()));
         }
     }
     println!();
@@ -281,8 +282,8 @@ async fn wait_for_wallet_ready(pb: &ProgressBar, backend_uri: &str) -> Result<()
             }
         }
         
-        if start.elapsed().as_secs() > 60 {
-            return Err(ZecDevError::ServiceNotReady("Wallet not ready after 60s".into()));
+        if start.elapsed().as_secs() > WALLET_TIMEOUT_SECONDS {
+            return Err(ZecDevError::ServiceNotReady("Wallet not ready after 100 minutes".into()));
         }
         
         sleep(Duration::from_secs(2)).await;
