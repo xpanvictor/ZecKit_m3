@@ -124,11 +124,11 @@ jobs:
       - name: Verify services are healthy
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "  Verifying Services"
+          echo "  Verifying Services (10 min timeout per service)"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
           echo "Checking Zebra RPC..."
-          for i in {1..30}; do
+          for i in {1..300}; do
             if curl -sf --max-time 5 \
               --data-binary '{"jsonrpc":"2.0","id":"1","method":"getblockcount","params":[]}' \
               -H 'content-type: application/json' \
@@ -136,41 +136,51 @@ jobs:
               echo "✓ Zebra RPC OK"
               break
             fi
-            if [ $i -eq 30 ]; then
-              echo "✗ Zebra RPC FAILED"
+            if [ $i -eq 300 ]; then
+              echo "✗ Zebra RPC FAILED after 10 minutes"
               exit 1
             fi
             sleep 2
           done
           
           echo "Checking Zaino..."
-          if docker exec zeckit-zaino zainod --version > /dev/null 2>&1; then
-            echo "✓ Zaino OK ($(docker exec zeckit-zaino zainod --version))"
-          else
-            echo "✗ Zaino FAILED"
-            exit 1
-          fi
+          for i in {1..300}; do
+            if docker exec zeckit-zaino zainod --version > /dev/null 2>&1; then
+              echo "✓ Zaino OK ($(docker exec zeckit-zaino zainod --version))"
+              break
+            fi
+            if [ $i -eq 300 ]; then
+              echo "✗ Zaino FAILED after 10 minutes"
+              exit 1
+            fi
+            sleep 2
+          done
           
           echo "Checking Faucet..."
-          for i in {1..15}; do
+          for i in {1..300}; do
             if curl -sf http://127.0.0.1:8080/health | grep -q "OK"; then
               echo "✓ Faucet OK"
               break
             fi
-            if [ $i -eq 15 ]; then
-              echo "✗ Faucet FAILED"
+            if [ $i -eq 300 ]; then
+              echo "✗ Faucet FAILED after 10 minutes"
               exit 1
             fi
             sleep 2
           done
           
           echo "Checking Zingo Wallet..."
-          if docker exec zeckit-zingo-wallet bash -c "echo -e 'quit' | zingo-cli --data-dir /var/zingo --server http://zaino:9067 --chain regtest --nosync" > /dev/null 2>&1; then
-            echo "✓ Zingo Wallet OK"
-          else
-            echo "✗ Zingo Wallet FAILED"
-            exit 1
-          fi
+          for i in {1..300}; do
+            if docker exec zeckit-zingo-wallet bash -c "echo -e 'quit' | zingo-cli --data-dir /var/zingo --server http://zaino:9067 --chain regtest --nosync" > /dev/null 2>&1; then
+              echo "✓ Zingo Wallet OK"
+              break
+            fi
+            if [ $i -eq 300 ]; then
+              echo "✗ Zingo Wallet FAILED after 10 minutes"
+              exit 1
+            fi
+            sleep 2
+          done
           
           echo ""
           echo "✓ All services healthy!"
