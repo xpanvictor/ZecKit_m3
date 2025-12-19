@@ -85,7 +85,7 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           
-          ./cli/target/release/zecdev up --backend zaino &
+          ./cli/target/release/zecdev up --backend zaino --fresh &
           PID=$!
           
           SECONDS=0
