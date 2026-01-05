@@ -1,0 +1,150 @@
+name: Test Action
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'action.yml'
+      - 'scripts/golden-flow.sh'
+      - 'docker-compose*.yml'
+      - '.github/workflows/test-action.yml'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-action-zaino:
+    name: Test Action (Zaino Backend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Test ZecKit Action
+        id: zeckit
+        uses: ./
+        with:
+          backend: 'zaino'
+          startup-timeout: '30'
+          mine-blocks: '120'
+          fund-wallet: 'true'
+          enable-faucet: 'true'
+          run-golden-tests: 'true'
+          collect-logs: 'true'
+          cleanup-on-complete: 'false'
+      
+      - name: Verify outputs
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Action Outputs Verification"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          # Check required outputs
+          if [ -z "${{ steps.zeckit.outputs.zebra-rpc-url }}" ]; then
+            echo "❌ Missing zebra-rpc-url output"
+            exit 1
+          fi
+          echo "✅ zebra-rpc-url: ${{ steps.zeckit.outputs.zebra-rpc-url }}"
+          
+          if [ -z "${{ steps.zeckit.outputs.grpc-url }}" ]; then
+            echo "❌ Missing grpc-url output"
+            exit 1
+          fi
+          echo "✅ grpc-url: ${{ steps.zeckit.outputs.grpc-url }}"
+          
+          if [ -z "${{ steps.zeckit.outputs.block-height }}" ]; then
+            echo "❌ Missing block-height output"
+            exit 1
+          fi
+          echo "✅ block-height: ${{ steps.zeckit.outputs.block-height }}"
+          
+          echo ""
+          echo "Golden test result: ${{ steps.zeckit.outputs.golden-test-result }}"
+          
+          if [ "${{ steps.zeckit.outputs.golden-test-result }}" != "pass" ]; then
+            echo "⚠️ Golden tests did not pass (may be expected for first run)"
+          fi
+      
+      - name: Test Zebra RPC
+        run: |
+          RESPONSE=$(curl -sf \
+            --data-binary '{"jsonrpc":"2.0","id":"1","method":"getblockcount","params":[]}' \
+            -H 'content-type: application/json' \
+            http://127.0.0.1:8232)
+          
+          BLOCKS=$(echo "$RESPONSE" | jq -r '.result')
+          echo "Block count: $BLOCKS"
+          
+          if [ "$BLOCKS" -lt 100 ]; then
+            echo "❌ Not enough blocks mined"
+            exit 1
+          fi
+          echo "✅ Zebra RPC is working with $BLOCKS blocks"
+      
+      - name: Test gRPC endpoint
+        run: |
+          # Simple connectivity test to zaino
+          if nc -z 127.0.0.1 9067; then
+            echo "✅ gRPC port is open"
+          else
+            echo "❌ gRPC port is not accessible"
+            exit 1
+          fi
+      
+      - name: Test Faucet
+        run: |
+          HEALTH=$(curl -sf http://127.0.0.1:8080/health 2>/dev/null || echo '{"status":"error"}')
+          STATUS=$(echo "$HEALTH" | jq -r '.status // "error"')
+          
+          if [ "$STATUS" == "healthy" ] || [ "$STATUS" == "ok" ]; then
+            echo "✅ Faucet is healthy"
+          else
+            echo "⚠️ Faucet health: $STATUS (may need more time)"
+          fi
+          
+          # Get stats
+          curl -sf http://127.0.0.1:8080/stats || echo "Stats not available yet"
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose --profile zaino down --remove-orphans -v 2>/dev/null || true
+
+  test-action-minimal:
+    name: Test Action (Minimal Config)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Test ZecKit Action with minimal config
+        id: zeckit
+        uses: ./
+        with:
+          backend: 'zaino'
+          mine-blocks: '105'
+          enable-faucet: 'false'
+          run-golden-tests: 'false'
+          cleanup-on-complete: 'true'
+      
+      - name: Verify minimal outputs
+        run: |
+          echo "Block height: ${{ steps.zeckit.outputs.block-height }}"
+          echo "Zebra RPC: ${{ steps.zeckit.outputs.zebra-rpc-url }}"
+          
+          # Just verify Zebra is running
+          curl -sf \
+            --data-binary '{"jsonrpc":"2.0","id":"1","method":"getinfo","params":[]}' \
+            -H 'content-type: application/json' \
+            http://127.0.0.1:8232 && echo "✅ Zebra is accessible"

@@ -1,0 +1,96 @@
+# Example: Using ZecKit GitHub Action
+#
+# This example shows how to use the ZecKit action in your own repository
+# to run Zcash integration tests.
+#
+# Copy this file to your repository's .github/workflows/ directory
+# and customize as needed.
+
+name: Zcash Integration Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  zcash-tests:
+    name: Run Zcash Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+      - name: Checkout your repository
+        uses: actions/checkout@v4
+      
+      # Start the ZecKit devnet
+      - name: Start ZecKit Devnet
+        id: devnet
+        uses: Timi16/ZecKit@main
+        with:
+          # Use Zaino backend (faster) or 'lwd' for lightwalletd
+          backend: zaino
+          
+          # Mine enough blocks for coinbase maturity (100 confirmations)
+          mine-blocks: '110'
+          
+          # Enable the faucet for requesting test funds
+          enable-faucet: 'true'
+          
+          # Keep devnet running for your tests
+          cleanup-on-complete: 'false'
+      
+      # Your custom tests go here
+      - name: Run your Zcash integration tests
+        env:
+          ZEBRA_RPC_URL: ${{ steps.devnet.outputs.zebra-rpc-url }}
+          GRPC_URL: ${{ steps.devnet.outputs.grpc-url }}
+          FAUCET_URL: ${{ steps.devnet.outputs.faucet-url }}
+          WALLET_ADDRESS: ${{ steps.devnet.outputs.wallet-address }}
+        run: |
+          echo "🧪 Running custom Zcash tests..."
+          echo ""
+          echo "Environment:"
+          echo "  Zebra RPC: $ZEBRA_RPC_URL"
+          echo "  gRPC: $GRPC_URL"
+          echo "  Faucet: $FAUCET_URL"
+          echo "  Block Height: ${{ steps.devnet.outputs.block-height }}"
+          echo ""
+          
+          # Example: Test Zebra RPC
+          curl -sf "$ZEBRA_RPC_URL" \
+            --data-binary '{"jsonrpc":"2.0","id":"1","method":"getblockcount","params":[]}' \
+            -H 'content-type: application/json' | jq .
+          
+          # Example: Request funds from faucet
+          # curl -X POST "$FAUCET_URL/request" \
+          #   -H "Content-Type: application/json" \
+          #   -d '{"address": "your-test-address", "amount": 1.0}'
+          
+          # Run your actual tests
+          # npm test
+          # cargo test
+          # pytest tests/
+      
+      # Cleanup
+      - name: Stop devnet
+        if: always()
+        run: docker compose --profile zaino down -v 2>/dev/null || true
+
+  # Optional: Run golden E2E tests to verify the full flow
+  golden-flow-tests:
+    name: Golden E2E Flow
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run ZecKit Golden Flow
+        uses: Timi16/ZecKit@main
+        with:
+          backend: zaino
+          mine-blocks: '150'
+          run-golden-tests: 'true'
+          cleanup-on-complete: 'true'

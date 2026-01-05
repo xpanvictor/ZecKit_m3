@@ -1,0 +1,421 @@
+name: 'ZecKit Devnet'
+description: 'Start a Zcash regtest devnet for testing with Zebra, wallet, and optional faucet'
+author: 'ZecKit'
+branding:
+  icon: 'zap'
+  color: 'yellow'
+
+inputs:
+  backend:
+    description: 'Backend type: "zaino" (recommended) or "lwd" (lightwalletd)'
+    required: false
+    default: 'zaino'
+  
+  network:
+    description: 'Network type (currently only regtest supported)'
+    required: false
+    default: 'regtest'
+  
+  startup-timeout:
+    description: 'Timeout in minutes for devnet startup'
+    required: false
+    default: '30'
+  
+  test-timeout:
+    description: 'Timeout in minutes for test execution'
+    required: false
+    default: '15'
+  
+  mine-blocks:
+    description: 'Number of blocks to mine on startup (min 101 for maturity)'
+    required: false
+    default: '110'
+  
+  fund-wallet:
+    description: 'Fund the test wallet with mined coins'
+    required: false
+    default: 'true'
+  
+  enable-faucet:
+    description: 'Enable the faucet service'
+    required: false
+    default: 'true'
+  
+  run-golden-tests:
+    description: 'Run the golden E2E test flow after startup'
+    required: false
+    default: 'false'
+  
+  image-tag:
+    description: 'Docker image tag to use (e.g., "latest", "sha-abc123", "v1.0.0")'
+    required: false
+    default: 'latest'
+  
+  collect-logs:
+    description: 'Collect and upload logs as artifacts'
+    required: false
+    default: 'true'
+  
+  cleanup-on-complete:
+    description: 'Stop and remove containers after completion'
+    required: false
+    default: 'true'
+  
+  zebra-rpc-port:
+    description: 'Port for Zebra RPC endpoint'
+    required: false
+    default: '8232'
+  
+  grpc-port:
+    description: 'Port for gRPC endpoint (lightwalletd/zaino)'
+    required: false
+    default: '9067'
+  
+  faucet-port:
+    description: 'Port for faucet HTTP API'
+    required: false
+    default: '8080'
+
+outputs:
+  zebra-rpc-url:
+    description: 'URL for Zebra RPC endpoint'
+    value: ${{ steps.setup.outputs.zebra-rpc-url }}
+  
+  grpc-url:
+    description: 'URL for gRPC endpoint'
+    value: ${{ steps.setup.outputs.grpc-url }}
+  
+  faucet-url:
+    description: 'URL for faucet API'
+    value: ${{ steps.setup.outputs.faucet-url }}
+  
+  wallet-address:
+    description: 'Unified address of the test wallet'
+    value: ${{ steps.wallet.outputs.address }}
+  
+  wallet-balance:
+    description: 'Balance of the test wallet in ZEC'
+    value: ${{ steps.wallet.outputs.balance }}
+  
+  block-height:
+    description: 'Current block height'
+    value: ${{ steps.status.outputs.block-height }}
+  
+  logs-artifact:
+    description: 'Name of the logs artifact'
+    value: ${{ steps.logs.outputs.artifact-name }}
+  
+  golden-test-result:
+    description: 'Result of golden E2E tests (pass/fail/skipped)'
+    value: ${{ steps.golden.outputs.result }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate inputs
+      id: validate
+      shell: bash
+      run: |
+        echo "🔍 Validating inputs..."
+        
+        # Validate backend
+        if [[ "${{ inputs.backend }}" != "zaino" && "${{ inputs.backend }}" != "lwd" ]]; then
+          echo "❌ Invalid backend: ${{ inputs.backend }}. Must be 'zaino' or 'lwd'"
+          exit 1
+        fi
+        
+        # Validate network
+        if [[ "${{ inputs.network }}" != "regtest" ]]; then
+          echo "❌ Only 'regtest' network is currently supported"
+          exit 1
+        fi
+        
+        # Validate blocks
+        BLOCKS="${{ inputs.mine-blocks }}"
+        if [[ "$BLOCKS" -lt 101 ]]; then
+          echo "⚠️ Warning: mine-blocks ($BLOCKS) < 101, coinbase won't be mature"
+        fi
+        
+        echo "✅ Inputs validated"
+        echo "   Backend: ${{ inputs.backend }}"
+        echo "   Network: ${{ inputs.network }}"
+        echo "   Image Tag: ${{ inputs.image-tag }}"
+
+    - name: Pull pre-built images
+      shell: bash
+      run: |
+        echo "🐳 Pulling pre-built images from GHCR..."
+        
+        OWNER="${{ github.repository_owner }}"
+        TAG="${{ inputs.image-tag }}"
+        
+        # Pull all required images
+        docker pull ghcr.io/${OWNER}/zeckit-zebra:${TAG} || {
+          echo "❌ Failed to pull zebra image"
+          exit 1
+        }
+        
+        if [[ "${{ inputs.backend }}" == "zaino" ]]; then
+          docker pull ghcr.io/${OWNER}/zeckit-zaino:${TAG}
+        else
+          docker pull ghcr.io/${OWNER}/zeckit-lightwalletd:${TAG}
+        fi
+        
+        docker pull ghcr.io/${OWNER}/zeckit-zingo:${TAG}
+        
+        if [[ "${{ inputs.enable-faucet }}" == "true" ]]; then
+          docker pull ghcr.io/${OWNER}/zeckit-faucet:${TAG}
+        fi
+        
+        echo "✅ All images pulled successfully"
+
+    - name: Setup environment
+      id: setup
+      shell: bash
+      run: |
+        echo "📋 Setting up environment..."
+        
+        # Export URLs
+        echo "zebra-rpc-url=http://127.0.0.1:${{ inputs.zebra-rpc-port }}" >> $GITHUB_OUTPUT
+        echo "grpc-url=http://127.0.0.1:${{ inputs.grpc-port }}" >> $GITHUB_OUTPUT
+        echo "faucet-url=http://127.0.0.1:${{ inputs.faucet-port }}" >> $GITHUB_OUTPUT
+        
+        # Create compose override for GHCR images
+        cat > docker-compose.override.yml << 'EOF'
+        services:
+          zebra:
+            image: ghcr.io/${{ github.repository_owner }}/zeckit-zebra:${{ inputs.image-tag }}
+            build: !override null
+          
+          lightwalletd:
+            image: ghcr.io/${{ github.repository_owner }}/zeckit-lightwalletd:${{ inputs.image-tag }}
+            build: !override null
+          
+          zaino:
+            image: ghcr.io/${{ github.repository_owner }}/zeckit-zaino:${{ inputs.image-tag }}
+            build: !override null
+          
+          zingo-wallet-lwd:
+            image: ghcr.io/${{ github.repository_owner }}/zeckit-zingo:${{ inputs.image-tag }}
+            build: !override null
+          
+          zingo-wallet-zaino:
+            image: ghcr.io/${{ github.repository_owner }}/zeckit-zingo:${{ inputs.image-tag }}
+            build: !override null
+          
+          faucet-lwd:
+            image: ghcr.io/${{ github.repository_owner }}/zeckit-faucet:${{ inputs.image-tag }}
+            build: !override null
+          
+          faucet-zaino:
+            image: ghcr.io/${{ github.repository_owner }}/zeckit-faucet:${{ inputs.image-tag }}
+            build: !override null
+        EOF
+        
+        echo "✅ Environment configured"
+
+    - name: Start devnet
+      shell: bash
+      timeout-minutes: ${{ fromJSON(inputs.startup-timeout) }}
+      run: |
+        echo "🚀 Starting ZecKit devnet..."
+        echo "   Backend: ${{ inputs.backend }}"
+        echo "   Timeout: ${{ inputs.startup-timeout }} minutes"
+        
+        # Start with the appropriate profile
+        docker compose --profile ${{ inputs.backend }} up -d
+        
+        echo "⏳ Waiting for Zebra to be healthy..."
+        
+        # Wait for Zebra
+        TIMEOUT=$((60 * ${{ inputs.startup-timeout }}))
+        ELAPSED=0
+        while [ $ELAPSED -lt $TIMEOUT ]; do
+          if curl -sf --max-time 5 \
+            --data-binary '{"jsonrpc":"2.0","id":"1","method":"getinfo","params":[]}' \
+            -H 'content-type: application/json' \
+            http://127.0.0.1:${{ inputs.zebra-rpc-port }} > /dev/null 2>&1; then
+            echo "✅ Zebra is ready!"
+            break
+          fi
+          sleep 10
+          ELAPSED=$((ELAPSED + 10))
+          echo "   Waiting... ($ELAPSED seconds)"
+        done
+        
+        if [ $ELAPSED -ge $TIMEOUT ]; then
+          echo "❌ Zebra startup timed out"
+          docker compose logs zebra
+          exit 1
+        fi
+        
+        # Wait for backend (zaino or lightwalletd)
+        echo "⏳ Waiting for ${{ inputs.backend }} to be ready..."
+        ELAPSED=0
+        while [ $ELAPSED -lt 300 ]; do
+          if docker compose ps ${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }} | grep -q "healthy\|running"; then
+            echo "✅ Backend is ready!"
+            break
+          fi
+          sleep 10
+          ELAPSED=$((ELAPSED + 10))
+        done
+        
+        echo "✅ Devnet started successfully"
+
+    - name: Mine initial blocks
+      if: inputs.mine-blocks != '0'
+      shell: bash
+      run: |
+        echo "⛏️ Mining ${{ inputs.mine-blocks }} blocks..."
+        
+        # Get a mining address from the wallet
+        MINING_ADDR=$(docker exec zeckit-zingo-wallet bash -c \
+          "echo -e 'addresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest --nosync" \
+          2>/dev/null | grep -o 'u1[a-zA-Z0-9]*' | head -1 || echo "")
+        
+        if [ -z "$MINING_ADDR" ]; then
+          echo "Creating new wallet and getting address..."
+          MINING_ADDR=$(docker exec zeckit-zingo-wallet bash -c \
+            "echo -e 'new\naddresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest" \
+            2>/dev/null | grep -o 'u1[a-zA-Z0-9]*' | head -1)
+        fi
+        
+        echo "Mining to address: $MINING_ADDR"
+        
+        # Mine blocks using Zebra's generate RPC
+        RESPONSE=$(curl -sf \
+          --data-binary "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"generate\",\"params\":[${{ inputs.mine-blocks }}, \"$MINING_ADDR\"]}" \
+          -H 'content-type: application/json' \
+          http://127.0.0.1:${{ inputs.zebra-rpc-port }})
+        
+        echo "Mining response: $RESPONSE"
+        
+        # Get block count
+        BLOCKS=$(curl -sf \
+          --data-binary '{"jsonrpc":"2.0","id":"1","method":"getblockcount","params":[]}' \
+          -H 'content-type: application/json' \
+          http://127.0.0.1:${{ inputs.zebra-rpc-port }} | jq -r '.result')
+        
+        echo "✅ Current block height: $BLOCKS"
+
+    - name: Sync and check wallet
+      id: wallet
+      shell: bash
+      run: |
+        echo "💰 Syncing wallet..."
+        
+        SERVER="${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}"
+        
+        # Sync the wallet
+        docker exec zeckit-zingo-wallet bash -c \
+          "echo -e 'sync\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" \
+          2>/dev/null || true
+        
+        # Get wallet info
+        WALLET_INFO=$(docker exec zeckit-zingo-wallet bash -c \
+          "echo -e 'balance\naddresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest --nosync" 2>/dev/null)
+        
+        # Extract address and balance
+        ADDRESS=$(echo "$WALLET_INFO" | grep -o 'u1[a-zA-Z0-9]*' | head -1 || echo "")
+        BALANCE=$(echo "$WALLET_INFO" | grep -E "spendable|total" | head -1 | grep -oE '[0-9]+\.[0-9]+' || echo "0")
+        
+        echo "address=$ADDRESS" >> $GITHUB_OUTPUT
+        echo "balance=$BALANCE" >> $GITHUB_OUTPUT
+        
+        echo "📋 Wallet Status:"
+        echo "   Address: $ADDRESS"
+        echo "   Balance: $BALANCE ZEC"
+
+    - name: Get status
+      id: status
+      shell: bash
+      run: |
+        echo "📊 Getting devnet status..."
+        
+        # Get block height
+        BLOCK_HEIGHT=$(curl -sf \
+          --data-binary '{"jsonrpc":"2.0","id":"1","method":"getblockcount","params":[]}' \
+          -H 'content-type: application/json' \
+          http://127.0.0.1:${{ inputs.zebra-rpc-port }} | jq -r '.result // 0')
+        
+        echo "block-height=$BLOCK_HEIGHT" >> $GITHUB_OUTPUT
+        
+        echo "📋 Devnet Status:"
+        echo "   Block Height: $BLOCK_HEIGHT"
+        echo "   Zebra RPC: http://127.0.0.1:${{ inputs.zebra-rpc-port }}"
+        echo "   gRPC: http://127.0.0.1:${{ inputs.grpc-port }}"
+        
+        if [[ "${{ inputs.enable-faucet }}" == "true" ]]; then
+          FAUCET_STATUS=$(curl -sf http://127.0.0.1:${{ inputs.faucet-port }}/health 2>/dev/null | jq -r '.status // "unknown"')
+          echo "   Faucet: $FAUCET_STATUS"
+        fi
+
+    - name: Run golden E2E tests
+      id: golden
+      if: inputs.run-golden-tests == 'true'
+      shell: bash
+      timeout-minutes: ${{ fromJSON(inputs.test-timeout) }}
+      run: |
+        echo "🧪 Running Golden E2E Tests..."
+        echo ""
+        
+        SERVER="${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}"
+        ZEBRA_RPC="http://127.0.0.1:${{ inputs.zebra-rpc-port }}"
+        GRPC_URL="http://${SERVER}:9067"
+        
+        # Run the golden flow test script from the checked out repo
+        chmod +x scripts/golden-flow.sh
+        
+        if ./scripts/golden-flow.sh \
+          --zebra-rpc "$ZEBRA_RPC" \
+          --grpc-url "$GRPC_URL" \
+          --backend "${{ inputs.backend }}"; then
+          echo "result=pass" >> $GITHUB_OUTPUT
+          echo "✅ Golden E2E tests PASSED"
+        else
+          echo "result=fail" >> $GITHUB_OUTPUT
+          echo "❌ Golden E2E tests FAILED"
+          exit 1
+        fi
+
+    - name: Collect logs
+      id: logs
+      if: always() && inputs.collect-logs == 'true'
+      shell: bash
+      run: |
+        echo "📝 Collecting logs..."
+        
+        mkdir -p zeckit-logs
+        
+        docker compose logs zebra > zeckit-logs/zebra.log 2>&1 || true
+        docker compose logs ${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }} > zeckit-logs/backend.log 2>&1 || true
+        docker compose logs zingo-wallet-${{ inputs.backend }} > zeckit-logs/wallet.log 2>&1 || true
+        
+        if [[ "${{ inputs.enable-faucet }}" == "true" ]]; then
+          docker compose logs faucet-${{ inputs.backend }} > zeckit-logs/faucet.log 2>&1 || true
+        fi
+        
+        docker ps -a > zeckit-logs/containers.log 2>&1 || true
+        
+        ARTIFACT_NAME="zeckit-logs-${{ github.run_number }}-${{ github.run_attempt }}"
+        echo "artifact-name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+        
+        echo "✅ Logs collected"
+
+    - name: Upload logs artifact
+      if: always() && inputs.collect-logs == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.logs.outputs.artifact-name }}
+        path: zeckit-logs/
+        retention-days: 7
+
+    - name: Cleanup
+      if: always() && inputs.cleanup-on-complete == 'true'
+      shell: bash
+      run: |
+        echo "🧹 Cleaning up..."
+        docker compose --profile ${{ inputs.backend }} down --remove-orphans 2>/dev/null || true
+        rm -f docker-compose.override.yml
+        echo "✅ Cleanup complete"

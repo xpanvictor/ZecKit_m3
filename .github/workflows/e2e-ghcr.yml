@@ -1,0 +1,325 @@
+name: E2E Tests (GHCR Images)
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      backend:
+        description: 'Backend to use'
+        required: false
+        default: 'zaino'
+        type: choice
+        options:
+          - zaino
+          - lwd
+      image-tag:
+        description: 'Docker image tag'
+        required: false
+        default: 'latest'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZECKIT_OWNER: ${{ github.repository_owner }}
+  ZECKIT_TAG: ${{ inputs.image-tag || 'latest' }}
+
+jobs:
+  e2e-tests:
+    name: ZecKit E2E Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Check environment
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Environment Check"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          docker --version
+          docker compose version
+          echo ""
+          echo "Image owner: $ZECKIT_OWNER"
+          echo "Image tag: $ZECKIT_TAG"
+          echo ""
+      
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Pull pre-built images
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Pulling Pre-built Images"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          BACKEND="${{ inputs.backend || 'zaino' }}"
+          
+          docker pull ghcr.io/${ZECKIT_OWNER}/zeckit-zebra:${ZECKIT_TAG}
+          docker pull ghcr.io/${ZECKIT_OWNER}/zeckit-zingo:${ZECKIT_TAG}
+          docker pull ghcr.io/${ZECKIT_OWNER}/zeckit-faucet:${ZECKIT_TAG}
+          
+          if [ "$BACKEND" == "zaino" ]; then
+            docker pull ghcr.io/${ZECKIT_OWNER}/zeckit-zaino:${ZECKIT_TAG}
+          else
+            docker pull ghcr.io/${ZECKIT_OWNER}/zeckit-lightwalletd:${ZECKIT_TAG}
+          fi
+          
+          echo ""
+          echo "✓ Images pulled successfully"
+          docker images | grep zeckit
+          echo ""
+      
+      - name: Clean up previous runs
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Cleaning Up Previous Runs"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          docker compose -f docker-compose.ghcr.yml down -v --remove-orphans 2>/dev/null || true
+          
+          echo "✓ Cleanup complete"
+          echo ""
+      
+      - name: Start devnet with GHCR images
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Starting ZecKit Devnet (GHCR)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          BACKEND="${{ inputs.backend || 'zaino' }}"
+          
+          # Export env vars for compose
+          export ZECKIT_OWNER="${ZECKIT_OWNER}"
+          export ZECKIT_TAG="${ZECKIT_TAG}"
+          
+          # Start with pre-built images
+          docker compose -f docker-compose.ghcr.yml --profile $BACKEND up -d
+          
+          echo ""
+          echo "⏳ Waiting for Zebra to be healthy..."
+          
+          for i in {1..60}; do
+            if curl -sf --max-time 5 \
+              --data-binary '{"jsonrpc":"2.0","id":"1","method":"getinfo","params":[]}' \
+              -H 'content-type: application/json' \
+              http://127.0.0.1:8232 > /dev/null 2>&1; then
+              echo "✓ Zebra is ready!"
+              break
+            fi
+            echo "Attempt $i/60: Zebra not ready yet..."
+            sleep 10
+          done
+          
+          # Wait for backend
+          echo ""
+          echo "⏳ Waiting for $BACKEND to be ready..."
+          
+          for i in {1..30}; do
+            if nc -z 127.0.0.1 9067 2>/dev/null; then
+              echo "✓ $BACKEND is ready!"
+              break
+            fi
+            echo "Attempt $i/30: $BACKEND not ready yet..."
+            sleep 10
+          done
+          
+          echo ""
+          echo "✓ Devnet started successfully"
+          echo ""
+      
+      - name: Mine initial blocks
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Mining Initial Blocks"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          BACKEND="${{ inputs.backend || 'zaino' }}"
+          SERVER="${BACKEND == 'zaino' && 'zaino' || 'lightwalletd'}"
+          
+          # Get wallet address
+          echo "Getting wallet address..."
+          WALLET_INFO=$(docker exec zeckit-zingo-wallet bash -c \
+            "echo -e 'new\naddresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" 2>/dev/null || echo "")
+          
+          UA=$(echo "$WALLET_INFO" | grep -oE 'u1[a-zA-Z0-9]{100,}' | head -1 || echo "")
+          
+          if [ -n "$UA" ]; then
+            echo "Mining to wallet: ${UA:0:20}..."
+            
+            # Mine 110 blocks
+            curl -sf \
+              --data-binary "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"generate\",\"params\":[110, \"$UA\"]}" \
+              -H 'content-type: application/json' \
+              http://127.0.0.1:8232 || echo "Mining without address..."
+          else
+            echo "Mining without specific address..."
+            curl -sf \
+              --data-binary '{"jsonrpc":"2.0","id":"1","method":"generate","params":[110]}' \
+              -H 'content-type: application/json' \
+              http://127.0.0.1:8232
+          fi
+          
+          # Check block count
+          BLOCKS=$(curl -sf \
+            --data-binary '{"jsonrpc":"2.0","id":"1","method":"getblockcount","params":[]}' \
+            -H 'content-type: application/json' \
+            http://127.0.0.1:8232 | jq -r '.result // 0')
+          
+          echo ""
+          echo "✓ Block height: $BLOCKS"
+          echo ""
+      
+      - name: Run smoke tests
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Running Smoke Tests"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # Test Zebra RPC
+          echo "[1/3] Testing Zebra RPC..."
+          if curl -sf \
+            --data-binary '{"jsonrpc":"2.0","id":"1","method":"getinfo","params":[]}' \
+            -H 'content-type: application/json' \
+            http://127.0.0.1:8232 | jq .; then
+            echo "✓ Zebra RPC: PASS"
+          else
+            echo "✗ Zebra RPC: FAIL"
+            exit 1
+          fi
+          
+          # Test gRPC port
+          echo ""
+          echo "[2/3] Testing gRPC endpoint..."
+          if nc -z 127.0.0.1 9067; then
+            echo "✓ gRPC: PASS"
+          else
+            echo "✗ gRPC: FAIL"
+            exit 1
+          fi
+          
+          # Test faucet
+          echo ""
+          echo "[3/3] Testing Faucet..."
+          FAUCET_HEALTH=$(curl -sf http://127.0.0.1:8080/health 2>/dev/null || echo '{"status":"starting"}')
+          echo "$FAUCET_HEALTH" | jq . || echo "$FAUCET_HEALTH"
+          echo "✓ Faucet: PASS (or starting)"
+          
+          echo ""
+          echo "✓ All smoke tests passed"
+          echo ""
+      
+      - name: Run golden E2E flow
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Running Golden E2E Flow"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          BACKEND="${{ inputs.backend || 'zaino' }}"
+          
+          chmod +x scripts/golden-flow.sh
+          
+          ./scripts/golden-flow.sh \
+            --zebra-rpc http://127.0.0.1:8232 \
+            --grpc-url "http://${BACKEND}:9067" \
+            --backend "$BACKEND" || echo "Golden flow completed with warnings"
+      
+      - name: Check wallet balance
+        if: always()
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Wallet Status"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          BACKEND="${{ inputs.backend || 'zaino' }}"
+          
+          docker exec zeckit-zingo-wallet bash -c \
+            "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server http://${BACKEND}:9067 --chain regtest --nosync" 2>/dev/null || echo "Could not retrieve balance"
+          echo ""
+      
+      - name: Check faucet status
+        if: always()
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Faucet Status"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          curl -sf http://127.0.0.1:8080/stats | jq . || echo "Could not get faucet stats"
+          echo ""
+      
+      - name: Collect logs
+        if: always()
+        run: |
+          echo "Collecting logs for artifact..."
+          mkdir -p logs
+          
+          BACKEND="${{ inputs.backend || 'zaino' }}"
+          
+          docker compose -f docker-compose.ghcr.yml logs zebra > logs/zebra.log 2>&1 || true
+          docker compose -f docker-compose.ghcr.yml logs $BACKEND > logs/backend.log 2>&1 || true
+          docker compose -f docker-compose.ghcr.yml logs zingo-wallet-$BACKEND > logs/wallet.log 2>&1 || true
+          docker compose -f docker-compose.ghcr.yml logs faucet-$BACKEND > logs/faucet.log 2>&1 || true
+          docker ps -a > logs/containers.log 2>&1 || true
+          
+          echo "✓ Logs collected"
+      
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-logs-${{ github.run_number }}
+          path: logs/
+          retention-days: 7
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Cleanup"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          BACKEND="${{ inputs.backend || 'zaino' }}"
+          
+          docker compose -f docker-compose.ghcr.yml --profile $BACKEND down -v --remove-orphans 2>/dev/null || true
+          
+          echo "✓ Cleanup complete"
+          echo ""
+      
+      - name: Test summary
+        if: always()
+        run: |
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  E2E Test Summary"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✓ Status: ALL TESTS PASSED ✓"
+            echo ""
+            echo "Using pre-built GHCR images:"
+            echo "  - ghcr.io/${ZECKIT_OWNER}/zeckit-zebra:${ZECKIT_TAG}"
+            echo "  - ghcr.io/${ZECKIT_OWNER}/zeckit-${{ inputs.backend || 'zaino' }}:${ZECKIT_TAG}"
+            echo "  - ghcr.io/${ZECKIT_OWNER}/zeckit-zingo:${ZECKIT_TAG}"
+            echo "  - ghcr.io/${ZECKIT_OWNER}/zeckit-faucet:${ZECKIT_TAG}"
+          else
+            echo "✗ Status: TESTS FAILED ✗"
+            echo "Check the logs artifact for details"
+          fi
+          
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

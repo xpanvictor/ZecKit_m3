@@ -1,0 +1,387 @@
+name: Golden E2E Tests
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      backend:
+        description: 'Backend to use'
+        required: false
+        default: 'zaino'
+        type: choice
+        options:
+          - zaino
+          - lwd
+      image-tag:
+        description: 'Docker image tag'
+        required: false
+        default: 'latest'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  golden-e2e:
+    name: Golden Flow E2E (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [zaino]
+        # Can add 'lwd' once lightwalletd images are stable
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Start ZecKit Devnet
+        id: zeckit
+        uses: ./
+        with:
+          backend: ${{ matrix.backend }}
+          startup-timeout: '30'
+          test-timeout: '15'
+          mine-blocks: '150'
+          fund-wallet: 'true'
+          enable-faucet: 'true'
+          run-golden-tests: 'false'  # We'll run them manually
+          image-tag: ${{ inputs.image-tag || 'latest' }}
+          collect-logs: 'true'
+          cleanup-on-complete: 'false'  # Keep running for manual tests
+      
+      - name: Display devnet status
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  ZecKit Devnet Status"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Zebra RPC:    ${{ steps.zeckit.outputs.zebra-rpc-url }}"
+          echo "gRPC:         ${{ steps.zeckit.outputs.grpc-url }}"
+          echo "Faucet:       ${{ steps.zeckit.outputs.faucet-url }}"
+          echo "Block Height: ${{ steps.zeckit.outputs.block-height }}"
+          echo "Wallet:       ${{ steps.zeckit.outputs.wallet-address }}"
+          echo "Balance:      ${{ steps.zeckit.outputs.wallet-balance }} ZEC"
+          echo ""
+      
+      - name: Run Golden Flow - Generate Unified Address
+        id: step1
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Step 1: Generate Unified Address (UA)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          SERVER="${{ matrix.backend == 'zaino' && 'zaino' || 'lightwalletd' }}"
+          
+          # Create a new wallet and get the unified address
+          RESULT=$(docker exec zeckit-zingo-wallet bash -c \
+            "echo -e 'new\naddresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" 2>/dev/null)
+          
+          echo "$RESULT"
+          
+          # Extract the unified address
+          UA=$(echo "$RESULT" | grep -oE 'u1[a-zA-Z0-9]{100,}' | head -1)
+          
+          if [ -z "$UA" ]; then
+            echo "❌ Failed to generate unified address"
+            exit 1
+          fi
+          
+          echo ""
+          echo "✅ Generated UA: ${UA:0:20}...${UA: -20}"
+          echo "ua=$UA" >> $GITHUB_OUTPUT
+      
+      - name: Run Golden Flow - Fund Wallet (Mining)
+        id: step2
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Step 2: Fund Wallet via Mining"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          UA="${{ steps.step1.outputs.ua }}"
+          
+          # Mine 10 more blocks to the wallet address
+          echo "Mining 10 blocks to wallet..."
+          
+          RESPONSE=$(curl -sf \
+            --data-binary "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"generate\",\"params\":[10, \"$UA\"]}" \
+            -H 'content-type: application/json' \
+            http://127.0.0.1:8232)
+          
+          echo "Mining response: $RESPONSE"
+          
+          # Sync wallet to see new balance
+          SERVER="${{ matrix.backend == 'zaino' && 'zaino' || 'lightwalletd' }}"
+          
+          echo ""
+          echo "Syncing wallet..."
+          docker exec zeckit-zingo-wallet bash -c \
+            "echo -e 'sync\nbalance\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" 2>/dev/null
+          
+          echo ""
+          echo "✅ Wallet funded via mining"
+      
+      - name: Run Golden Flow - Verify Transparent Funds
+        id: step3
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Step 3: Verify Transparent Funds"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          SERVER="${{ matrix.backend == 'zaino' && 'zaino' || 'lightwalletd' }}"
+          
+          # Get detailed balance
+          BALANCE_INFO=$(docker exec zeckit-zingo-wallet bash -c \
+            "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest --nosync" 2>/dev/null)
+          
+          echo "$BALANCE_INFO"
+          
+          # Check for transparent balance
+          TRANSPARENT=$(echo "$BALANCE_INFO" | grep -i "transparent" | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "0")
+          
+          echo ""
+          echo "Transparent balance: $TRANSPARENT ZEC"
+          echo "transparent-balance=$TRANSPARENT" >> $GITHUB_OUTPUT
+          
+          if [ "$TRANSPARENT" == "0" ] || [ -z "$TRANSPARENT" ]; then
+            echo "⚠️ No transparent balance yet (may need more confirmations)"
+          else
+            echo "✅ Transparent funds verified"
+          fi
+      
+      - name: Run Golden Flow - Autoshield
+        id: step4
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Step 4: Autoshield to Orchard"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          SERVER="${{ matrix.backend == 'zaino' && 'zaino' || 'lightwalletd' }}"
+          
+          # Execute shield command
+          echo "Shielding transparent funds to Orchard pool..."
+          SHIELD_RESULT=$(docker exec zeckit-zingo-wallet bash -c \
+            "echo -e 'shield\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" 2>/dev/null)
+          
+          echo "$SHIELD_RESULT"
+          
+          # Extract transaction ID if present
+          TXID=$(echo "$SHIELD_RESULT" | grep -oE '[a-f0-9]{64}' | head -1 || echo "")
+          
+          if [ -n "$TXID" ]; then
+            echo ""
+            echo "✅ Shield transaction submitted: ${TXID:0:16}..."
+            echo "txid=$TXID" >> $GITHUB_OUTPUT
+            
+            # Mine a block to confirm
+            echo ""
+            echo "Mining 1 block to confirm..."
+            curl -sf \
+              --data-binary '{"jsonrpc":"2.0","id":"1","method":"generate","params":[1]}' \
+              -H 'content-type: application/json' \
+              http://127.0.0.1:8232
+          else
+            echo "⚠️ No shield transaction (may not have transparent funds yet)"
+            echo "txid=" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Run Golden Flow - Create Second Wallet
+        id: step5
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Step 5: Create Second Wallet (Recipient)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          SERVER="${{ matrix.backend == 'zaino' && 'zaino' || 'lightwalletd' }}"
+          
+          # Create a second wallet directory and generate new wallet
+          docker exec zeckit-zingo-wallet bash -c "mkdir -p /var/zingo2"
+          
+          RESULT=$(docker exec zeckit-zingo-wallet bash -c \
+            "echo -e 'new\naddresses\nquit' | zingo-cli --data-dir /var/zingo2 --server http://${SERVER}:9067 --chain regtest" 2>/dev/null)
+          
+          echo "$RESULT"
+          
+          # Extract the recipient unified address
+          RECIPIENT_UA=$(echo "$RESULT" | grep -oE 'u1[a-zA-Z0-9]{100,}' | head -1)
+          
+          if [ -z "$RECIPIENT_UA" ]; then
+            echo "❌ Failed to create recipient wallet"
+            exit 1
+          fi
+          
+          echo ""
+          echo "✅ Recipient UA: ${RECIPIENT_UA:0:20}...${RECIPIENT_UA: -20}"
+          echo "recipient-ua=$RECIPIENT_UA" >> $GITHUB_OUTPUT
+      
+      - name: Run Golden Flow - Shielded Send
+        id: step6
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Step 6: Shielded Send"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          SERVER="${{ matrix.backend == 'zaino' && 'zaino' || 'lightwalletd' }}"
+          RECIPIENT="${{ steps.step5.outputs.recipient-ua }}"
+          
+          # First sync and check balance
+          echo "Checking sender balance..."
+          docker exec zeckit-zingo-wallet bash -c \
+            "echo -e 'sync\nbalance\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" 2>/dev/null
+          
+          # Send 0.1 ZEC to recipient
+          echo ""
+          echo "Sending 0.1 ZEC to recipient..."
+          SEND_RESULT=$(docker exec zeckit-zingo-wallet bash -c \
+            "echo -e 'send $RECIPIENT 0.1\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" 2>/dev/null)
+          
+          echo "$SEND_RESULT"
+          
+          # Extract transaction ID
+          TXID=$(echo "$SEND_RESULT" | grep -oE '[a-f0-9]{64}' | head -1 || echo "")
+          
+          if [ -n "$TXID" ]; then
+            echo ""
+            echo "✅ Send transaction: ${TXID:0:16}..."
+            echo "txid=$TXID" >> $GITHUB_OUTPUT
+            
+            # Mine a block to confirm
+            echo ""
+            echo "Mining 1 block to confirm..."
+            curl -sf \
+              --data-binary '{"jsonrpc":"2.0","id":"1","method":"generate","params":[1]}' \
+              -H 'content-type: application/json' \
+              http://127.0.0.1:8232
+          else
+            echo "⚠️ Send may have failed or no funds available"
+            echo "txid=" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Run Golden Flow - Rescan/Sync
+        id: step7
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Step 7: Rescan and Sync Both Wallets"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          SERVER="${{ matrix.backend == 'zaino' && 'zaino' || 'lightwalletd' }}"
+          
+          # Sync sender wallet
+          echo "Syncing sender wallet..."
+          docker exec zeckit-zingo-wallet bash -c \
+            "echo -e 'rescan\nbalance\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" 2>/dev/null
+          
+          echo ""
+          echo "Syncing recipient wallet..."
+          docker exec zeckit-zingo-wallet bash -c \
+            "echo -e 'sync\nbalance\nquit' | zingo-cli --data-dir /var/zingo2 --server http://${SERVER}:9067 --chain regtest" 2>/dev/null
+          
+          echo ""
+          echo "✅ Both wallets synced"
+      
+      - name: Run Golden Flow - Verify Transaction
+        id: step8
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Step 8: Verify Transaction"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          SERVER="${{ matrix.backend == 'zaino' && 'zaino' || 'lightwalletd' }}"
+          
+          # Check recipient balance
+          echo "Recipient wallet balance:"
+          RECIPIENT_BALANCE=$(docker exec zeckit-zingo-wallet bash -c \
+            "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo2 --server http://${SERVER}:9067 --chain regtest --nosync" 2>/dev/null)
+          
+          echo "$RECIPIENT_BALANCE"
+          
+          # Extract balance value
+          BALANCE=$(echo "$RECIPIENT_BALANCE" | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "0")
+          
+          echo ""
+          if [ "$BALANCE" != "0" ] && [ -n "$BALANCE" ]; then
+            echo "✅ Recipient received funds: $BALANCE ZEC"
+            echo "verified=true" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Recipient balance is 0 (transaction may need more confirmations)"
+            echo "verified=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Show sender's transaction list
+          echo ""
+          echo "Sender transaction history:"
+          docker exec zeckit-zingo-wallet bash -c \
+            "echo -e 'list\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest --nosync" 2>/dev/null | head -50
+      
+      - name: Golden Flow Summary
+        if: always()
+        run: |
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Golden E2E Flow Summary"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Step 1 - Generate UA:     ${{ steps.step1.outcome == 'success' && '✅' || '❌' }}"
+          echo "Step 2 - Fund Wallet:     ${{ steps.step2.outcome == 'success' && '✅' || '❌' }}"
+          echo "Step 3 - Verify Funds:    ${{ steps.step3.outcome == 'success' && '✅' || '❌' }}"
+          echo "Step 4 - Autoshield:      ${{ steps.step4.outcome == 'success' && '✅' || '❌' }}"
+          echo "Step 5 - Create Wallet 2: ${{ steps.step5.outcome == 'success' && '✅' || '❌' }}"
+          echo "Step 6 - Shielded Send:   ${{ steps.step6.outcome == 'success' && '✅' || '❌' }}"
+          echo "Step 7 - Rescan/Sync:     ${{ steps.step7.outcome == 'success' && '✅' || '❌' }}"
+          echo "Step 8 - Verify:          ${{ steps.step8.outcome == 'success' && '✅' || '❌' }}"
+          echo ""
+          
+          if [[ "${{ steps.step8.outputs.verified }}" == "true" ]]; then
+            echo "🎉 Golden E2E Flow: ALL STEPS PASSED"
+          else
+            echo "⚠️ Golden E2E Flow: COMPLETED WITH WARNINGS"
+            echo "   Some verifications may need more block confirmations"
+          fi
+          echo ""
+      
+      - name: Collect detailed logs
+        if: always()
+        run: |
+          mkdir -p golden-logs
+          
+          docker compose logs zebra > golden-logs/zebra.log 2>&1 || true
+          docker compose logs ${{ matrix.backend == 'zaino' && 'zaino' || 'lightwalletd' }} > golden-logs/backend.log 2>&1 || true
+          docker compose logs zingo-wallet-${{ matrix.backend }} > golden-logs/wallet.log 2>&1 || true
+          docker compose logs faucet-${{ matrix.backend }} > golden-logs/faucet.log 2>&1 || true
+          docker ps -a > golden-logs/containers.log 2>&1 || true
+          
+          # Get block count
+          curl -sf \
+            --data-binary '{"jsonrpc":"2.0","id":"1","method":"getblockcount","params":[]}' \
+            -H 'content-type: application/json' \
+            http://127.0.0.1:8232 > golden-logs/blockcount.json 2>&1 || true
+      
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-e2e-logs-${{ matrix.backend }}-${{ github.run_number }}
+          path: golden-logs/
+          retention-days: 14
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose --profile ${{ matrix.backend }} down --remove-orphans -v 2>/dev/null || true

@@ -29,11 +29,123 @@
 - UA (ZIP-316) address generation
 - Comprehensive test suite (M1 + M2)
 
-** M3 - GitHub Action (Next)**
-- Reusable GitHub Action
-- Golden E2E shielded flows
-- Pre-mined blockchain snapshots
-- Backend parity testing
+** M3 - GitHub Action**
+- ✅ Reusable GitHub Action published
+- ✅ Pre-built Docker images on GHCR
+- ✅ Golden E2E shielded flows (UA → Fund → Shield → Send → Verify)
+- ✅ Backend toggle support (Zaino / Lightwalletd)
+- ✅ Comprehensive CI/CD integration
+
+---
+
+## GitHub Action (M3)
+
+Use ZecKit as a reusable GitHub Action in your CI/CD workflows for Zcash testing.
+
+### Quick Usage
+
+```yaml
+# .github/workflows/zcash-tests.yml
+name: Zcash Integration Tests
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Start ZecKit Devnet
+        uses: Timi16/ZecKit@main
+        id: zeckit
+        with:
+          backend: zaino
+          mine-blocks: '150'
+          run-golden-tests: 'true'
+      
+      - name: Use the devnet
+        run: |
+          echo "Zebra RPC: ${{ steps.zeckit.outputs.zebra-rpc-url }}"
+          echo "Wallet: ${{ steps.zeckit.outputs.wallet-address }}"
+          # Your Zcash integration tests here
+```
+
+### Action Inputs
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `backend` | Backend type: `zaino` or `lwd` | `zaino` |
+| `startup-timeout` | Timeout for devnet startup (minutes) | `30` |
+| `test-timeout` | Timeout for test execution (minutes) | `15` |
+| `mine-blocks` | Blocks to mine on startup (min 101 for maturity) | `110` |
+| `fund-wallet` | Fund the test wallet with mined coins | `true` |
+| `enable-faucet` | Enable the faucet service | `true` |
+| `run-golden-tests` | Run golden E2E flow after startup | `false` |
+| `image-tag` | Docker image tag (e.g., `latest`, `v1.0.0`) | `latest` |
+| `collect-logs` | Upload logs as artifacts | `true` |
+| `cleanup-on-complete` | Stop containers after completion | `true` |
+| `zebra-rpc-port` | Zebra RPC port | `8232` |
+| `grpc-port` | gRPC port (lightwalletd/zaino) | `9067` |
+| `faucet-port` | Faucet HTTP API port | `8080` |
+
+### Action Outputs
+
+| Output | Description |
+|--------|-------------|
+| `zebra-rpc-url` | URL for Zebra RPC endpoint |
+| `grpc-url` | URL for gRPC endpoint |
+| `faucet-url` | URL for faucet API |
+| `wallet-address` | Unified address of the test wallet |
+| `wallet-balance` | Balance of the test wallet in ZEC |
+| `block-height` | Current block height |
+| `logs-artifact` | Name of the logs artifact |
+| `golden-test-result` | Result of golden tests (pass/fail/skipped) |
+
+### Pre-built Docker Images (GHCR)
+
+Images are automatically built and pushed to GitHub Container Registry:
+
+```bash
+# Pull pre-built images
+docker pull ghcr.io/timi16/zeckit-zebra:latest
+docker pull ghcr.io/timi16/zeckit-zaino:latest
+docker pull ghcr.io/timi16/zeckit-lightwalletd:latest
+docker pull ghcr.io/timi16/zeckit-zingo:latest
+docker pull ghcr.io/timi16/zeckit-faucet:latest
+
+# Use with docker-compose.ghcr.yml for faster startup
+docker compose -f docker-compose.ghcr.yml --profile zaino up -d
+```
+
+### Golden E2E Flow
+
+The golden flow tests the complete Zcash wallet lifecycle:
+
+1. **Generate UA** - Create a new unified address (ZIP-316)
+2. **Fund Wallet** - Mine blocks to fund the wallet
+3. **Verify Funds** - Confirm transparent balance
+4. **Autoshield** - Shield funds to Orchard pool
+5. **Shielded Send** - Send ZEC via shielded transaction
+6. **Rescan/Sync** - Rescan both wallets
+7. **Verify** - Confirm recipient received funds
+
+Run the golden flow:
+
+```yaml
+- uses: Timi16/ZecKit@main
+  with:
+    run-golden-tests: 'true'
+```
+
+Or run manually:
+
+```bash
+./scripts/golden-flow.sh \
+  --zebra-rpc http://127.0.0.1:8232 \
+  --grpc-url http://zaino:9067 \
+  --backend zaino
+```
 
 ---
 
