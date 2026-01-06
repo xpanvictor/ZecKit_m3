@@ -1,4 +1,4 @@
-name: E2E Tests (GHCR Images)
+name: E2E Tests
 
 on:
   push:
@@ -19,29 +19,19 @@ on:
         options:
           - zaino
           - lwd
-      image-tag:
-        description: 'Docker image tag'
-        required: false
-        default: 'latest'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
-env:
-  ZECKIT_OWNER: ${{ github.repository_owner }}
-  ZECKIT_TAG: ${{ inputs.image-tag || 'latest' }}
 
 jobs:
   e2e-tests:
     name: ZecKit E2E Test Suite
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
       - name: Check environment
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -50,34 +40,7 @@ jobs:
           docker --version
           docker compose version
           echo ""
-          echo "Image owner: $ZECKIT_OWNER"
-          echo "Image tag: $ZECKIT_TAG"
-          echo ""
-      
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Pull pre-built images
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "  Pulling Pre-built Images"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          
-          BACKEND="${{ inputs.backend || 'zaino' }}"
-          
-          docker pull ghcr.io/${ZECKIT_OWNER}/zeckit-zebra:${ZECKIT_TAG}
-          docker pull ghcr.io/${ZECKIT_OWNER}/zeckit-zingo:${ZECKIT_TAG}
-          docker pull ghcr.io/${ZECKIT_OWNER}/zeckit-faucet:${ZECKIT_TAG}
-          
-          if [ "$BACKEND" == "zaino" ]; then
-            docker pull ghcr.io/${ZECKIT_OWNER}/zeckit-zaino:${ZECKIT_TAG}
-          else
-            docker pull ghcr.io/${ZECKIT_OWNER}/zeckit-lightwalletd:${ZECKIT_TAG}
-          fi
+      # ...existing code...
           
           echo ""
           echo "✓ Images pulled successfully"

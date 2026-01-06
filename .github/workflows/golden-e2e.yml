@@ -330,58 +330,66 @@ jobs:
           docker exec zeckit-zingo-wallet bash -c \
             "echo -e 'list\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest --nosync" 2>/dev/null | head -50
       
-      - name: Golden Flow Summary
-        if: always()
-        run: |
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "  Golden E2E Flow Summary"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          echo "Step 1 - Generate UA:     ${{ steps.step1.outcome == 'success' && '✅' || '❌' }}"
-          echo "Step 2 - Fund Wallet:     ${{ steps.step2.outcome == 'success' && '✅' || '❌' }}"
-          echo "Step 3 - Verify Funds:    ${{ steps.step3.outcome == 'success' && '✅' || '❌' }}"
-          echo "Step 4 - Autoshield:      ${{ steps.step4.outcome == 'success' && '✅' || '❌' }}"
-          echo "Step 5 - Create Wallet 2: ${{ steps.step5.outcome == 'success' && '✅' || '❌' }}"
-          echo "Step 6 - Shielded Send:   ${{ steps.step6.outcome == 'success' && '✅' || '❌' }}"
-          echo "Step 7 - Rescan/Sync:     ${{ steps.step7.outcome == 'success' && '✅' || '❌' }}"
-          echo "Step 8 - Verify:          ${{ steps.step8.outcome == 'success' && '✅' || '❌' }}"
-          echo ""
-          
-          if [[ "${{ steps.step8.outputs.verified }}" == "true" ]]; then
-            echo "🎉 Golden E2E Flow: ALL STEPS PASSED"
-          else
-            echo "⚠️ Golden E2E Flow: COMPLETED WITH WARNINGS"
-            echo "   Some verifications may need more block confirmations"
-          fi
-          echo ""
+      name: Golden E2E Tests
+
+      on:
+        workflow_dispatch:
+          inputs:
+            backend:
+              description: 'Backend to use'
+              required: false
+              default: 'zaino'
+              type: choice
+              options:
+                - zaino
+                - lwd
+
+      concurrency:
+        group: ${{ github.workflow }}-${{ github.ref }}
+        cancel-in-progress: true
+
+      jobs:
+        golden-e2e:
+          name: Golden Flow E2E (${{ matrix.backend }})
+          runs-on: ubuntu-latest
+          timeout-minutes: 45
+    
+          strategy:
+            fail-fast: false
+            matrix:
+              backend: [zaino]
+
+          steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
       
-      - name: Collect detailed logs
-        if: always()
-        run: |
-          mkdir -p golden-logs
-          
-          docker compose logs zebra > golden-logs/zebra.log 2>&1 || true
-          docker compose logs ${{ matrix.backend == 'zaino' && 'zaino' || 'lightwalletd' }} > golden-logs/backend.log 2>&1 || true
-          docker compose logs zingo-wallet-${{ matrix.backend }} > golden-logs/wallet.log 2>&1 || true
-          docker compose logs faucet-${{ matrix.backend }} > golden-logs/faucet.log 2>&1 || true
-          docker ps -a > golden-logs/containers.log 2>&1 || true
-          
-          # Get block count
-          curl -sf \
-            --data-binary '{"jsonrpc":"2.0","id":"1","method":"getblockcount","params":[]}' \
-            -H 'content-type: application/json' \
-            http://127.0.0.1:8232 > golden-logs/blockcount.json 2>&1 || true
-      
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: golden-e2e-logs-${{ matrix.backend }}-${{ github.run_number }}
-          path: golden-logs/
-          retention-days: 14
-      
-      - name: Cleanup
-        if: always()
-        run: |
-          docker compose --profile ${{ matrix.backend }} down --remove-orphans -v 2>/dev/null || true
+            - name: Start ZecKit Devnet
+              id: zeckit
+              uses: ./
+              with:
+                backend: ${{ matrix.backend }}
+                startup-timeout: '30'
+                test-timeout: '15'
+                mine-blocks: '150'
+                fund-wallet: 'true'
+                enable-faucet: 'true'
+                run-golden-tests: 'false'  # We'll run them manually
+                image-tag: ${{ inputs.image-tag || 'latest' }}
+                collect-logs: 'true'
+                cleanup-on-complete: 'false'  # Keep running for manual tests
+
+            - name: Display devnet status
+              run: |
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "  ZecKit Devnet Status"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo ""
+                echo "Zebra RPC:    ${{ steps.zeckit.outputs.zebra-rpc-url }}"
+                echo "gRPC:         ${{ steps.zeckit.outputs.grpc-url }}"
+                echo "Faucet:       ${{ steps.zeckit.outputs.faucet-url }}"
+                echo "Block Height: ${{ steps.zeckit.outputs.block-height }}"
+                echo "Wallet:       ${{ steps.zeckit.outputs.wallet-address }}"
+                echo "Balance:      ${{ steps.zeckit.outputs.wallet-balance }} ZEC"
+                echo ""
+
+            # ...existing code...

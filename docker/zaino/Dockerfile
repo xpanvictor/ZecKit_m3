@@ -1,47 +1,20 @@
 # ========================================
-# Builder Stage
+# ZecKit Zaino - Using Pre-built Image
 # ========================================
-FROM rust:1.85-slim-bookworm as builder
+# Uses the official zingodevops/zaino image with no-TLS support
+# This avoids the 20+ minute build time
+#
+FROM zingodevops/zaino:v0.1.2-rc3-no-tls
+
+USER root
 
 RUN apt-get update && apt-get install -y \
-    git \
-    pkg-config \
-    libssl-dev \
-    protobuf-compiler \
-    build-essential \
-    libclang-dev \
-    clang \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-
-# Clone YOUR fork with the fix
-RUN git clone https://github.com/Timi16/zaino.git
-
-WORKDIR /build/zaino
-
-# Checkout your fix branch
-RUN git checkout fix/regtest-insecure-grpc
-
-# Build with NO_TLS flag
-RUN cargo build --release --bin zainod --features no_tls_use_unencrypted_traffic
-
-# ========================================
-# Runtime Stage
-# ========================================
-FROM debian:bookworm-slim
-
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    libssl3 \
     curl \
     netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -u 2002 -s /bin/bash zaino
-
-COPY --from=builder /build/zaino/target/release/zainod /usr/local/bin/zainod
-RUN chmod +x /usr/local/bin/zainod
+# Create zaino user if not exists
+RUN id -u zaino 2>/dev/null || useradd -m -u 2002 -s /bin/bash zaino
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

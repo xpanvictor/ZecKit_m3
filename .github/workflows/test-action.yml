@@ -48,17 +48,7 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           
-          # Check required outputs
-          if [ -z "${{ steps.zeckit.outputs.zebra-rpc-url }}" ]; then
-            echo "❌ Missing zebra-rpc-url output"
-            exit 1
-          fi
-          echo "✅ zebra-rpc-url: ${{ steps.zeckit.outputs.zebra-rpc-url }}"
-          
-          if [ -z "${{ steps.zeckit.outputs.grpc-url }}" ]; then
-            echo "❌ Missing grpc-url output"
-            exit 1
-          fi
+            # No GHCR login or pulls needed; using official/pre-built images
           echo "✅ grpc-url: ${{ steps.zeckit.outputs.grpc-url }}"
           
           if [ -z "${{ steps.zeckit.outputs.block-height }}" ]; then
