@@ -216,7 +216,6 @@ runs:
 
     - name: Start devnet
       shell: bash
-      timeout-minutes: ${{ fromJSON(inputs.startup-timeout) }}
       run: |
         echo "🚀 Starting ZecKit devnet..."
         echo "   Backend: ${{ inputs.backend }}"
@@ -355,7 +354,6 @@ runs:
       id: golden
       if: inputs.run-golden-tests == 'true'
       shell: bash
-      timeout-minutes: ${{ fromJSON(inputs.test-timeout) }}
       run: |
         echo "🧪 Running Golden E2E Tests..."
         echo ""
