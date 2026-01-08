@@ -85,12 +85,12 @@ jobs:
           
           # Create a new wallet and get the unified address
           RESULT=$(docker exec zeckit-zingo-wallet bash -c \
-            "echo -e 'new\naddresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" 2>/dev/null)
+            "echo -e 'new_address oz\naddresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" 2>/dev/null)
           
           echo "$RESULT"
           
           # Extract the unified address
-          UA=$(echo "$RESULT" | grep -oE 'u1[a-zA-Z0-9]{100,}' | head -1)
+          UA=$(echo "$RESULT" | grep -oE 'uregtest[a-zA-Z0-9]{100,}' | head -1)
           
           if [ -z "$UA" ]; then
             echo "❌ Failed to generate unified address"
@@ -127,7 +127,7 @@ jobs:
           echo ""
           echo "Syncing wallet..."
           docker exec zeckit-zingo-wallet bash -c \
-            "echo -e 'sync\nbalance\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" 2>/dev/null
+            "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" 2>/dev/null
           
           echo ""
           echo "✅ Wallet funded via mining"
@@ -212,12 +212,12 @@ jobs:
           docker exec zeckit-zingo-wallet bash -c "mkdir -p /var/zingo2"
           
           RESULT=$(docker exec zeckit-zingo-wallet bash -c \
-            "echo -e 'new\naddresses\nquit' | zingo-cli --data-dir /var/zingo2 --server http://${SERVER}:9067 --chain regtest" 2>/dev/null)
+            "echo -e 'new_address oz\naddresses\nquit' | zingo-cli --data-dir /var/zingo2 --server http://${SERVER}:9067 --chain regtest" 2>/dev/null)
           
           echo "$RESULT"
           
           # Extract the recipient unified address
-          RECIPIENT_UA=$(echo "$RESULT" | grep -oE 'u1[a-zA-Z0-9]{100,}' | head -1)
+          RECIPIENT_UA=$(echo "$RESULT" | grep -oE 'uregtest[a-zA-Z0-9]{100,}' | head -1)
           
           if [ -z "$RECIPIENT_UA" ]; then
             echo "❌ Failed to create recipient wallet"
@@ -242,7 +242,7 @@ jobs:
           # First sync and check balance
           echo "Checking sender balance..."
           docker exec zeckit-zingo-wallet bash -c \
-            "echo -e 'sync\nbalance\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" 2>/dev/null
+            "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" 2>/dev/null
           
           # Send 0.1 ZEC to recipient
           echo ""
@@ -290,7 +290,7 @@ jobs:
           echo ""
           echo "Syncing recipient wallet..."
           docker exec zeckit-zingo-wallet bash -c \
-            "echo -e 'sync\nbalance\nquit' | zingo-cli --data-dir /var/zingo2 --server http://${SERVER}:9067 --chain regtest" 2>/dev/null
+            "echo -e 'balance\nquit' | zingo-cli --data-dir /var/zingo2 --server http://${SERVER}:9067 --chain regtest" 2>/dev/null
           
           echo ""
           echo "✅ Both wallets synced"

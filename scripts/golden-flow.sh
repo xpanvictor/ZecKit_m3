@@ -134,7 +134,7 @@ step1_generate_ua() {
     
     # Create new wallet
     local result
-    result=$(zingo_cmd "$WALLET_DIR" "new\naddresses")
+    result=$(zingo_cmd "$WALLET_DIR" "new_address oz\naddresses")
     
     echo "$result"
     
@@ -174,7 +174,7 @@ step2_fund_wallet() {
     
     # Sync wallet
     log_info "Syncing wallet..."
-    zingo_cmd "$WALLET_DIR" "sync\nbalance"
+    zingo_cmd "$WALLET_DIR" "balance"
     
     log_pass "Wallet funded via mining"
     return 0
@@ -239,7 +239,7 @@ step5_create_recipient() {
     
     # Create new wallet
     local result
-    result=$(zingo_cmd "$WALLET_DIR_2" "new\naddresses")
+    result=$(zingo_cmd "$WALLET_DIR_2" "new_address oz\naddresses")
     
     echo "$result"
     
@@ -268,7 +268,7 @@ step6_shielded_send() {
     
     # Check sender balance first
     log_info "Checking sender balance..."
-    zingo_cmd "$WALLET_DIR" "sync\nbalance"
+    zingo_cmd "$WALLET_DIR" "balance"
     
     # Send 0.1 ZEC
     log_info "Sending 0.1 ZEC to recipient..."
@@ -304,7 +304,7 @@ step7_rescan_sync() {
     zingo_cmd "$WALLET_DIR" "rescan\nbalance"
     
     log_info "Syncing recipient wallet..."
-    zingo_cmd "$WALLET_DIR_2" "sync\nbalance"
+    zingo_cmd "$WALLET_DIR_2" "balance"
     
     log_pass "Both wallets synced"
     return 0
@@ -333,7 +333,7 @@ step8_verify_transaction() {
     
     # Show sender transaction list
     log_info "Sender transaction history:"
-    zingo_cmd "$WALLET_DIR" "list" | head -50
+    zingo_cmd "$WALLET_DIR" "transactions" | head -50
     
     echo "VERIFIED=$VERIFIED" >> /tmp/golden-flow-state
     return 0
