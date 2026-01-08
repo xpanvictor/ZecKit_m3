@@ -270,18 +270,18 @@ runs:
         
         # Get a mining address from the wallet
         MINING_ADDR=$(docker exec zeckit-zingo-wallet bash -c \
-          "echo -e 'addresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest --nosync" \
+          "echo -e 'addresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest" \
           2>/dev/null | grep -o 'u1[a-zA-Z0-9]*' | head -1 || echo "")
         
         if [ -z "$MINING_ADDR" ]; then
           echo "Creating new wallet..."
           docker exec zeckit-zingo-wallet bash -c \
-            "echo -e 'new\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest --nosync" \
+            "echo -e 'newaddress\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest" \
             2>/dev/null || true
           
           echo "Getting address from new wallet..."
           MINING_ADDR=$(docker exec zeckit-zingo-wallet bash -c \
-            "echo -e 'addresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest --nosync" \
+            "echo -e 'addresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest" \
             2>/dev/null | grep -o 'u1[a-zA-Z0-9]*' | head -1 || echo "")
         fi
 
@@ -291,6 +291,8 @@ runs:
           docker exec zeckit-zingo-wallet ls -la /usr/local/bin || true
           echo "--- zingo-cli version (if present) ---"
           docker exec zeckit-zingo-wallet /usr/local/bin/zingo-cli --version 2>/dev/null || docker exec zeckit-zingo-wallet zingo-cli --version 2>/dev/null || true
+          echo "--- zingo-cli help ---"
+          docker exec zeckit-zingo-wallet bash -c "echo -e 'help\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest" 2>/dev/null || true
           echo "--- /var/zingo contents ---"
           docker exec zeckit-zingo-wallet bash -lc 'ls -la /var/zingo || true; find /var/zingo -maxdepth 2 -type f -print' || true
           echo "--- container logs (last 200 lines) ---"
