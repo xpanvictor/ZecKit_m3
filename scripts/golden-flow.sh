@@ -134,7 +134,7 @@ step1_generate_ua() {
     
     # Create new wallet
     local result
-    result=$(zingo_cmd "$WALLET_DIR" "new_address ozt\naddresses")
+    result=$(zingo_cmd "$WALLET_DIR" "new_address oz\nt_addresses")
     
     echo "$result"
     
@@ -146,8 +146,23 @@ step1_generate_ua() {
         return 1
     fi
     
+    # Create transparent address for mining
+    result=$(zingo_cmd "$WALLET_DIR" "new_taddress")
+    
+    echo "$result"
+    
+    # Extract taddress
+    TADDR=$(echo "$result" | grep -oE 't1[a-zA-Z0-9]{30,}' | head -1)
+    
+    if [ -z "$TADDR" ]; then
+        log_fail "Failed to generate transparent address"
+        return 1
+    fi
+    
     log_pass "Generated UA: ${UA:0:20}...${UA: -20}"
+    log_pass "Generated TADDR: $TADDR"
     echo "UA=$UA" >> /tmp/golden-flow-state
+    echo "TADDR=$TADDR" >> /tmp/golden-flow-state
     return 0
 }
 
@@ -156,14 +171,14 @@ step2_fund_wallet() {
     
     source /tmp/golden-flow-state 2>/dev/null || true
     
-    if [ -z "$UA" ]; then
-        log_fail "No UA available for mining"
+    if [ -z "$TADDR" ]; then
+        log_fail "No TADDR available for mining"
         return 1
     fi
     
     log_info "Mining 20 blocks to wallet..."
     local result
-    result=$(mine_blocks 20 "$UA")
+    result=$(mine_blocks 20 "$TADDR")
     
     echo "Mining result: $result"
     
@@ -239,7 +254,7 @@ step5_create_recipient() {
     
     # Create new wallet
     local result
-    result=$(zingo_cmd "$WALLET_DIR_2" "new_address ozt\naddresses")
+    result=$(zingo_cmd "$WALLET_DIR_2" "new_address oz\naddresses")
     
     echo "$result"
     
