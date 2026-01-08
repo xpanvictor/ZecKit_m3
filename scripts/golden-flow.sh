@@ -134,7 +134,7 @@ step1_generate_ua() {
     
     # Create new wallet
     local result
-    result=$(zingo_cmd "$WALLET_DIR" "new_address oz\naddresses")
+    result=$(zingo_cmd "$WALLET_DIR" "new_address ozt\naddresses")
     
     echo "$result"
     
@@ -239,7 +239,7 @@ step5_create_recipient() {
     
     # Create new wallet
     local result
-    result=$(zingo_cmd "$WALLET_DIR_2" "new_address oz\naddresses")
+    result=$(zingo_cmd "$WALLET_DIR_2" "new_address ozt\naddresses")
     
     echo "$result"
     

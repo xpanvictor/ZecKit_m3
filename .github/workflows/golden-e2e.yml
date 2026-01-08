@@ -85,7 +85,7 @@ jobs:
           
           # Create a new wallet and get the unified address
           RESULT=$(docker exec zeckit-zingo-wallet bash -c \
-            "echo -e 'new_address oz\naddresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" 2>/dev/null)
+            "echo -e 'new_address ozt\naddresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${SERVER}:9067 --chain regtest" 2>/dev/null)
           
           echo "$RESULT"
           
@@ -212,7 +212,7 @@ jobs:
           docker exec zeckit-zingo-wallet bash -c "mkdir -p /var/zingo2"
           
           RESULT=$(docker exec zeckit-zingo-wallet bash -c \
-            "echo -e 'new_address oz\naddresses\nquit' | zingo-cli --data-dir /var/zingo2 --server http://${SERVER}:9067 --chain regtest" 2>/dev/null)
+            "echo -e 'new_address ozt\naddresses\nquit' | zingo-cli --data-dir /var/zingo2 --server http://${SERVER}:9067 --chain regtest" 2>/dev/null)
           
           echo "$RESULT"
           
