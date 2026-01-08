@@ -276,10 +276,24 @@ runs:
         if [ -z "$MINING_ADDR" ]; then
           echo "Creating new wallet and getting address..."
           MINING_ADDR=$(docker exec zeckit-zingo-wallet bash -c \
-            "echo -e 'new\naddresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest" \
-            2>/dev/null | grep -o 'u1[a-zA-Z0-9]*' | head -1)
+            "echo -e 'new\naddresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest --nosync" \
+            2>/dev/null | grep -o 'u1[a-zA-Z0-9]*' | head -1 || echo "")
         fi
-        
+
+        if [ -z "$MINING_ADDR" ]; then
+          echo "❌ Failed to obtain mining address from zingo wallet container. Collecting diagnostics..."
+          echo "--- /usr/local/bin ---"
+          docker exec zeckit-zingo-wallet ls -la /usr/local/bin || true
+          echo "--- zingo-cli version (if present) ---"
+          docker exec zeckit-zingo-wallet /usr/local/bin/zingo-cli --version 2>/dev/null || docker exec zeckit-zingo-wallet zingo-cli --version 2>/dev/null || true
+          echo "--- /var/zingo contents ---"
+          docker exec zeckit-zingo-wallet bash -lc 'ls -la /var/zingo || true; find /var/zingo -maxdepth 2 -type f -print' || true
+          echo "--- container logs (last 200 lines) ---"
+          docker logs --tail 200 zeckit-zingo-wallet || true
+          echo "❗ Exiting: no mining address available. Ensure zingo-cli is installed in the wallet image and that the wallet can create addresses."
+          exit 1
+        fi
+
         echo "Mining to address: $MINING_ADDR"
         
         # Mine blocks using Zebra's generate RPC
