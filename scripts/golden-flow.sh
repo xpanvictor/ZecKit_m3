@@ -139,7 +139,7 @@ step1_generate_ua() {
     echo "$result"
     
     # Extract UA
-    UA=$(echo "$result" | grep -oE 'u1[a-zA-Z0-9]{100,}' | head -1)
+    UA=$(echo "$result" | grep -oE 'uregtest[a-zA-Z0-9]{100,}' | head -1)
     
     if [ -z "$UA" ]; then
         log_fail "Failed to generate unified address"
@@ -244,7 +244,7 @@ step5_create_recipient() {
     echo "$result"
     
     # Extract recipient UA
-    RECIPIENT_UA=$(echo "$result" | grep -oE 'u1[a-zA-Z0-9]{100,}' | head -1)
+    RECIPIENT_UA=$(echo "$result" | grep -oE 'uregtest[a-zA-Z0-9]{100,}' | head -1)
     
     if [ -z "$RECIPIENT_UA" ]; then
         log_fail "Failed to create recipient wallet"
