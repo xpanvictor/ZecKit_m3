@@ -276,7 +276,7 @@ runs:
         if [ -z "$MINING_ADDR" ]; then
           echo "Creating new wallet..."
           docker exec zeckit-zingo-wallet bash -c \
-            "echo -e 'new_address\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest" \
+            "echo -e 'new_address oz\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest" \
             2>/dev/null || true
           
           echo "Getting address from new wallet..."
