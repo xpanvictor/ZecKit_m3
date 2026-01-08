@@ -274,9 +274,14 @@ runs:
           2>/dev/null | grep -o 'u1[a-zA-Z0-9]*' | head -1 || echo "")
         
         if [ -z "$MINING_ADDR" ]; then
-          echo "Creating new wallet and getting address..."
+          echo "Creating new wallet..."
+          docker exec zeckit-zingo-wallet bash -c \
+            "echo -e 'new\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest --nosync" \
+            2>/dev/null || true
+          
+          echo "Getting address from new wallet..."
           MINING_ADDR=$(docker exec zeckit-zingo-wallet bash -c \
-            "echo -e 'new\naddresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest --nosync" \
+            "echo -e 'addresses\nquit' | zingo-cli --data-dir /var/zingo --server http://${{ inputs.backend == 'zaino' && 'zaino' || 'lightwalletd' }}:9067 --chain regtest --nosync" \
             2>/dev/null | grep -o 'u1[a-zA-Z0-9]*' | head -1 || echo "")
         fi
 
