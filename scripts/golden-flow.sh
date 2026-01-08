@@ -147,12 +147,12 @@ step1_generate_ua() {
     fi
     
     # Create transparent address for mining
-    result=$(zingo_cmd "$WALLET_DIR" "new_taddress")
+    result=$(zingo_cmd "$WALLET_DIR" "new_taddress_allow_gap")
     
     echo "$result"
     
     # Extract taddress
-    TADDR=$(echo "$result" | grep -oE 't1[a-zA-Z0-9]{30,}' | head -1)
+    TADDR=$(echo "$result" | grep -oE 't[1m][a-zA-Z0-9]{30,}' | head -1)
     
     if [ -z "$TADDR" ]; then
         log_fail "Failed to generate transparent address"
