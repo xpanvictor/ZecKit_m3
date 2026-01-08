@@ -189,7 +189,7 @@ step2_fund_wallet() {
     
     # Sync wallet
     log_info "Syncing wallet..."
-    zingo_cmd "$WALLET_DIR" "balance"
+    zingo_cmd "$WALLET_DIR" "rescan\nbalance"
     
     log_pass "Wallet funded via mining"
     return 0
@@ -199,7 +199,7 @@ step3_verify_funds() {
     log_step 3 "Verify Transparent Funds"
     
     local balance_info
-    balance_info=$(zingo_cmd "$WALLET_DIR" "balance")
+    balance_info=$(zingo_cmd "$WALLET_DIR" "rescan\nbalance")
     
     echo "$balance_info"
     
@@ -283,7 +283,7 @@ step6_shielded_send() {
     
     # Check sender balance first
     log_info "Checking sender balance..."
-    zingo_cmd "$WALLET_DIR" "balance"
+    zingo_cmd "$WALLET_DIR" "rescan\nbalance"
     
     # Send 0.1 ZEC
     log_info "Sending 0.1 ZEC to recipient..."
@@ -319,7 +319,7 @@ step7_rescan_sync() {
     zingo_cmd "$WALLET_DIR" "rescan\nbalance"
     
     log_info "Syncing recipient wallet..."
-    zingo_cmd "$WALLET_DIR_2" "balance"
+    zingo_cmd "$WALLET_DIR_2" "rescan\nbalance"
     
     log_pass "Both wallets synced"
     return 0
@@ -330,7 +330,7 @@ step8_verify_transaction() {
     
     log_info "Recipient wallet balance:"
     local recipient_balance
-    recipient_balance=$(zingo_cmd "$WALLET_DIR_2" "balance")
+    recipient_balance=$(zingo_cmd "$WALLET_DIR_2" "rescan\nbalance")
     
     echo "$recipient_balance"
     
