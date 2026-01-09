@@ -161,6 +161,7 @@ step1_generate_ua() {
     
     log_pass "Generated UA: ${UA:0:20}...${UA: -20}"
     log_pass "Generated TADDR: $TADDR"
+    log_info "Wallet birthday: $(zingo_cmd "$WALLET_DIR" "birthday")"
     echo "UA=$UA" >> /tmp/golden-flow-state
     echo "TADDR=$TADDR" >> /tmp/golden-flow-state
     return 0
@@ -176,9 +177,22 @@ step2_fund_wallet() {
         return 1
     fi
     
-    log_info "Mining 20 blocks to wallet..."
+    # Check if wallet already has funds
+    log_info "Checking existing balance..."
+    local existing_balance_info
+    existing_balance_info=$(zingo_cmd "$WALLET_DIR" "sync 0\nbalance")
+    local existing_transparent
+    existing_transparent=$(echo "$existing_balance_info" | grep -i "transparent" | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "0")
+    
+    if [ "$existing_transparent" != "0" ] && [ -n "$existing_transparent" ]; then
+        log_info "Wallet already has transparent balance: $existing_transparent ZEC - skipping mining"
+        log_pass "Wallet already funded"
+        return 0
+    fi
+    
+    log_info "Mining 110 blocks to wallet..."
     local result
-    result=$(mine_blocks 20 "$TADDR")
+    result=$(mine_blocks 110 "$TADDR")
     
     echo "Mining result: $result"
     
@@ -189,7 +203,7 @@ step2_fund_wallet() {
     
     # Sync wallet
     log_info "Syncing wallet..."
-    zingo_cmd "$WALLET_DIR" "rescan\nbalance"
+    zingo_cmd "$WALLET_DIR" "sync 0\nbalance"
     
     log_pass "Wallet funded via mining"
     return 0
@@ -199,7 +213,7 @@ step3_verify_funds() {
     log_step 3 "Verify Transparent Funds"
     
     local balance_info
-    balance_info=$(zingo_cmd "$WALLET_DIR" "rescan\nbalance")
+    balance_info=$(zingo_cmd "$WALLET_DIR" "sync 0\nbalance")
     
     echo "$balance_info"
     
@@ -283,7 +297,7 @@ step6_shielded_send() {
     
     # Check sender balance first
     log_info "Checking sender balance..."
-    zingo_cmd "$WALLET_DIR" "rescan\nbalance"
+    zingo_cmd "$WALLET_DIR" "sync 0\nbalance"
     
     # Send 0.1 ZEC
     log_info "Sending 0.1 ZEC to recipient..."
@@ -316,10 +330,10 @@ step7_rescan_sync() {
     log_step 7 "Rescan and Sync Both Wallets"
     
     log_info "Syncing sender wallet..."
-    zingo_cmd "$WALLET_DIR" "rescan\nbalance"
+    zingo_cmd "$WALLET_DIR" "sync 0\nbalance"
     
     log_info "Syncing recipient wallet..."
-    zingo_cmd "$WALLET_DIR_2" "rescan\nbalance"
+    zingo_cmd "$WALLET_DIR_2" "sync 0\nbalance"
     
     log_pass "Both wallets synced"
     return 0
@@ -330,7 +344,7 @@ step8_verify_transaction() {
     
     log_info "Recipient wallet balance:"
     local recipient_balance
-    recipient_balance=$(zingo_cmd "$WALLET_DIR_2" "rescan\nbalance")
+    recipient_balance=$(zingo_cmd "$WALLET_DIR_2" "sync 0\nbalance")
     
     echo "$recipient_balance"
     
