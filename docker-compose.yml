@@ -12,7 +12,7 @@ volumes:
   zebra-data:
   lightwalletd-data:
   zaino-data:
-  faucet-data:  # New: persistent faucet wallet data
+  faucet-data:
 
 # ========================================
 # SERVICES
@@ -118,13 +118,13 @@ services:
   # ========================================
   faucet-lwd:
     build:
-      context: ./faucet
+      context: ./zeckit-faucet  # ← CHANGED FROM ./faucet
       dockerfile: Dockerfile
     container_name: zeckit-faucet
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
-      - faucet-data:/var/zingo  # Persistent wallet storage
+      - faucet-data:/var/zingo
     environment:
       - LIGHTWALLETD_URI=http://lightwalletd:9067
       - ZEBRA_RPC_URL=http://zebra:8232
@@ -155,13 +155,13 @@ services:
   # ========================================
   faucet-zaino:
     build:
-      context: ./faucet
+      context: ./zeckit-faucet  # ← CHANGED FROM ./faucet
       dockerfile: Dockerfile
     container_name: zeckit-faucet
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
-      - faucet-data:/var/zingo  # Persistent wallet storage
+      - faucet-data:/var/zingo
     environment:
       - LIGHTWALLETD_URI=http://zaino:9067
       - ZEBRA_RPC_URL=http://zebra:8232
