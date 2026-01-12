@@ -1,0 +1,91 @@
+name: 'ZecKit E2E Tests'
+description: 'Run end-to-end tests for Zcash components using ZecKit'
+inputs:
+  backend:
+    description: 'Light-client backend to use (lwd or zaino)'
+    required: true
+    default: 'lwd'
+  timeout:
+    description: 'Timeout for test execution in minutes'
+    required: false
+    default: '30'
+  chain-params:
+    description: 'Chain parameters (regtest, testnet, mainnet)'
+    required: false
+    default: 'regtest'
+  zeckit-version:
+    description: 'ZecKit CLI version/tag to use'
+    required: false
+    default: 'latest'
+outputs:
+  test-results:
+    description: 'JSON string with test results'
+    value: ${{ steps.test.outputs.results }}
+  logs:
+    description: 'Path to test logs'
+    value: ${{ steps.test.outputs.logs }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup ZecKit CLI
+      shell: bash
+      run: |
+        # Build ZecKit CLI
+        cd cli
+        cargo build --release
+        cd ..
+        # Make CLI available
+        echo "ZecKit CLI built successfully"
+
+    - name: Start ZecKit Devnet
+      shell: bash
+      run: |
+        echo "Starting ZecKit devnet with ${{ inputs.backend }} backend..."
+        # Use the CLI to start
+        ./cli/target/release/zeckit up --backend ${{ inputs.backend }} --fresh
+
+    - name: Wait for Services
+      shell: bash
+      run: |
+        echo "Waiting for services to be ready..."
+        timeout ${{ inputs.timeout }}m bash -c '
+        while ! ./cli/target/release/zeckit status | grep -q "All services healthy"; do
+          echo "Waiting for services..."
+          sleep 10
+        done
+        echo "Services are ready!"
+        '
+
+    - name: Run Golden E2E Tests
+      id: test
+      shell: bash
+      run: |
+        echo "Running golden E2E tests..."
+        # Run the extended test command
+        if ./cli/target/release/zeckit test --golden; then
+          echo "results={\"status\":\"passed\"}" >> $GITHUB_OUTPUT
+        else
+          echo "results={\"status\":\"failed\"}" >> $GITHUB_OUTPUT
+        fi
+        echo "logs=test-logs.txt" >> $GITHUB_OUTPUT
+
+    - name: Collect Logs and Artifacts
+      if: always()
+      shell: bash
+      run: |
+        echo "Collecting logs..."
+        ./cli/target/release/zeckit status > status.log
+        docker logs zeckit-zebra > zebra.log 2>&1 || true
+        if [ "${{ inputs.backend }}" = "lwd" ]; then
+          docker logs zeckit-lightwalletd > backend.log 2>&1 || true
+        elif [ "${{ inputs.backend }}" = "zaino" ]; then
+          docker logs zeckit-zaino > backend.log 2>&1 || true
+        fi
+        docker logs zeckit-zingo-wallet > zingo.log 2>&1 || true
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      run: |
+        echo "Cleaning up..."
+        ./cli/target/release/zeckit down --purge
