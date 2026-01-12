@@ -1,42 +1,17 @@
 # Multi-stage build for lightwalletd
-FROM golang:1.24-bookworm as builder
-
-# Install dependencies
-RUN apt-get update && apt-get install -y \
-    git \
-    build-essential \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# Clone lightwalletd
-WORKDIR /build
-RUN git clone https://github.com/zcash/lightwalletd.git
-WORKDIR /build/lightwalletd
-
-# Check structure and build (main.go is in root now)
-RUN ls -la && \
-    go mod download && \
-    go build -o lightwalletd .
+FROM golang:1.24-bookworm as probe_builder
 
 # Build grpc-health-probe
-WORKDIR /build
 RUN git clone https://github.com/grpc-ecosystem/grpc-health-probe.git
-WORKDIR /build/grpc-health-probe
+WORKDIR /grpc-health-probe
 RUN go build -o grpc_health_probe
 
 # Runtime stage
-FROM debian:bookworm-slim
+FROM electriccoinco/lightwalletd:latest
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy binaries from builder
-COPY --from=builder /build/lightwalletd/lightwalletd /usr/local/bin/lightwalletd
-COPY --from=builder /build/grpc-health-probe/grpc_health_probe /usr/local/bin/grpc_health_probe
-RUN chmod +x /usr/local/bin/lightwalletd /usr/local/bin/grpc_health_probe
+# Copy grpc_health_probe
+COPY --from=probe_builder /grpc-health-probe/grpc_health_probe /usr/local/bin/grpc_health_probe
+RUN chmod +x /usr/local/bin/grpc_health_probe
 
 # Copy entrypoint
 COPY entrypoint.sh /entrypoint.sh

@@ -43,7 +43,11 @@ enum Commands {
     Status,
     
     /// Run smoke tests
-    Test,
+    Test {
+        /// Run golden E2E flow instead of smoke tests
+        #[arg(long)]
+        golden: bool,
+    },
 }
 
 #[tokio::main]
@@ -60,8 +64,8 @@ async fn main() {
         Commands::Status => {
             commands::status::execute().await
         }
-        Commands::Test => {
-            commands::test::execute().await
+        Commands::Test { golden } => {
+            commands::test::execute(golden).await
         }
     };
     
