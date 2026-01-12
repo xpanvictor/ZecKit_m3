@@ -29,11 +29,20 @@
 - UA (ZIP-316) address generation
 - Comprehensive test suite (M1 + M2)
 
-** M3 - GitHub Action (Next)**
-- Reusable GitHub Action
-- Golden E2E shielded flows
-- Pre-mined blockchain snapshots
-- Backend parity testing
+** M3 - GitHub Action (Complete)**
+- ✅ Reusable GitHub Action with backend selector, timeouts, and chain params
+- ✅ Golden E2E shielded flows: UA generation → funding → autoshielding → shielded send → rescan/sync → verification
+- Pre-mined blockchain snapshots (planned)
+- Backend parity testing (planned)
+
+See [GitHub Action Documentation](.github/actions/zeckit-e2e/README.md) for implementation details.
+
+### Sample Consumer Repository
+
+A sample repository demonstrating GitHub Action usage is available in [`sample_zeckit/`](./sample_zeckit/) with:
+- Workflow matrix testing both lightwalletd and zaino backends
+- Artifact collection and test result reporting
+- Required vs experimental backend configuration
 
 ---
 
